@@ -475,7 +475,6 @@ function TXwGenerator.RefineBoard(const AImpl: TXwBoard; const ABoard: IXwBoard;
   var ABest: TXwMetrics): Integer;
 var
   LCross, LOrder: TArray<Integer>;
-  LLetter: IXwLetter;
   I, J, K, N, LH, LV, LStepH, LStepV, LTmp, LBestAt, LPos: Integer;
   LRound: Integer;
   LImproved: Boolean;
@@ -512,8 +511,7 @@ begin
       LV := AMoves[I].Placement.V;
       for K := 1 to FWords[AMoves[I].WordIndex].Length do
       begin
-        LLetter := ABoard.LetterAt(LH, LV);
-        if (LLetter <> nil) and LLetter.IsCrossed then
+        if ABoard.CellState(LH, LV) = 3 then
           Inc(LCross[I]);
         Inc(LH, LStepH);
         Inc(LV, LStepV);

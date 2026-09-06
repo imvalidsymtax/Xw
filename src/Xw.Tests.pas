@@ -103,7 +103,7 @@ var
   LKey, LRun: string;
   LPlaced: TXwPlacedWord;
   I, H, V, LCount: Integer;
-  LLetter: IXwLetter;
+  LChar: Char;
   LDir: TXwWordDirection;
   LPair: TPair<string, Integer>;
 begin
@@ -144,11 +144,11 @@ begin
           while True do
           begin
             if LDir = wdHorizontal then
-              LLetter := ABoard.LetterAt(H + I, V)
+              LChar := ABoard.CellChar(H + I, V)
             else
-              LLetter := ABoard.LetterAt(H, V + I);
-            if LLetter = nil then Break;
-            LRun := LRun + LLetter.Original;
+              LChar := ABoard.CellChar(H, V + I);
+            if LChar = #0 then Break;
+            LRun := LRun + LChar;
             Inc(I);
           end;
 
@@ -256,6 +256,7 @@ var
   LFactory: IXwWordFactory;
   LBoard: IXwBoard;
   LMsg: string;
+  LI, LJ: Integer;
 begin
   Writeln('TestGeometry');
   LLang := TXwLangPL.Create(True);
@@ -275,6 +276,19 @@ begin
 
   Check(XwValidateBoard(LBoard, LMsg), 'walidator nie znajduje pasozytniczych ciagow: ' + LMsg);
   CheckEq(1, LBoard.Evaluate.Crossings, 'dwa slowa daja jedno skrzyzowanie');
+
+  Check(LBoard.CellChar(6, 7) = 'K', 'tablica cieni zna litere pierwszej komorki');
+  CheckEq(1, LBoard.CellState(6, 7), 'K uzyte tylko poziomo');
+  CheckEq(3, LBoard.CellState(8, 7), 'T uzyte w obu kierunkach');
+  CheckEq(0, LBoard.CellState(0, 0), 'puste pole ma stan zero');
+  Check(LBoard.CellChar(0, 0) = #0, 'puste pole nie ma litery');
+  Check(LBoard.CellChar(-1, 7) = #0, 'poza plansza zwraca pustke');
+
+  for LI := 0 to LBoard.HSize - 1 do
+    for LJ := 0 to LBoard.VSize - 1 do
+      if (LBoard.CellChar(LI, LJ) <> #0) <> (LBoard.LetterAt(LI, LJ) <> nil) then
+        Check(False, Format('tablica cieni rozjechala sie z siatka w (%d,%d)', [LI, LJ]));
+  Check(True, 'tablica cieni zgodna z siatka obiektow na calej planszy');
 end;
 
 procedure TestPlacementMetrics;

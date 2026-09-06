@@ -103,7 +103,6 @@ function XwMeasure(const ABoard: IXwBoard; const ARequested: Integer;
 var
   LBounds: TXwBounds;
   LPlaced: TXwPlacedWord;
-  LLetter: IXwLetter;
   I, K, LH, LV, LStepH, LStepV: Integer;
   LWordCross, LRun, LWordMaxRun: Integer;
   LCrossSum: Integer;
@@ -122,7 +121,7 @@ begin
 
   for LV := LBounds.MinV to LBounds.MaxV do
     for LH := LBounds.MinH to LBounds.MaxH do
-      if ABoard.IsOccupied(LH, LV) then
+      if ABoard.CellState(LH, LV) <> 0 then
         Inc(Result.Letters);
 
   Result.MinCross := MaxInt;
@@ -155,9 +154,7 @@ begin
 
     for K := 1 to LPlaced.Word.Length do
     begin
-      LLetter := ABoard.LetterAt(LH, LV);
-
-      if (LLetter <> nil) and LLetter.IsCrossed then
+      if ABoard.CellState(LH, LV) = 3 then
       begin
         Inc(LWordCross);
         LRun := 0;

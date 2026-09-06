@@ -17,6 +17,10 @@ type
     strict private
       FWordCross: TList<Integer>;
       FCellWord: TArray<Integer>;
+      FChars: TArray<Char>;
+      FDirs: TArray<Byte>;
+      FStamp: TArray<Integer>;
+      FStampGen: Integer;
 
       FWords: TList<TXwPlacedWord>;
       FMatrix: TXwGrid<IXwLetter>;
@@ -86,6 +90,8 @@ type
       function GetPlacedWord(const AIndex: Integer): TXwPlacedWord;
       function GetWordCount: Integer;
       function IsOccupied(const AH, AV: Integer): Boolean;
+      function CellChar(const AH, AV: Integer): Char;
+      function CellState(const AH, AV: Integer): Byte;
       function LetterAt(const AH, AV: Integer): IXwLetter;
 
       function AnchorCount: Integer;
@@ -116,6 +122,9 @@ uses
 
 const
   XW_MAX_RESCUE = 32;
+  XW_DIR_H = 1;
+  XW_DIR_V = 2;
+  XW_DIR_BOTH = 3;
 
 constructor TXwBoard.Create(const AHSize, AVSize: Integer; const ALang: IXwLang);
 var
@@ -131,6 +140,11 @@ begin
   SetLength(FCellWord, FMatrix.FlatSize);
   for I := 0 to High(FCellWord) do
     FCellWord[I] := -1;
+
+  SetLength(FChars, FMatrix.FlatSize);
+  SetLength(FDirs, FMatrix.FlatSize);
+  SetLength(FStamp, FMatrix.FlatSize * 2);
+  FStampGen := 0;
 
   FTouched := TList<Integer>.Create;
   FAnchors := TXwAnchorIndex.Create(ALang);
@@ -176,8 +190,19 @@ end;
 
 function TXwBoard.IsOccupied(const AH, AV: Integer): Boolean;
 begin
-  Result := FMatrix.InBounds(AH, AV)
-    and FMatrix.IsOccupied(FMatrix.IndexOf(AH, AV));
+  Result := FMatrix.InBounds(AH, AV) and (FChars[AV * FMatrix.HSize + AH] <> #0);
+end;
+
+function TXwBoard.CellChar(const AH, AV: Integer): Char;
+begin
+  if not FMatrix.InBounds(AH, AV) then Exit(#0);
+  Result := FChars[AV * FMatrix.HSize + AH];
+end;
+
+function TXwBoard.CellState(const AH, AV: Integer): Byte;
+begin
+  if not FMatrix.InBounds(AH, AV) then Exit(0);
+  Result := FDirs[AV * FMatrix.HSize + AH];
 end;
 
 function TXwBoard.GetWeightRescue: Double;
@@ -235,16 +260,15 @@ end;
 
 function TXwBoard.CanPlaceWord(const AWord: IXwWord; var APlacement: TXwWordPlacement): Boolean;
 var
-  LStep, LPerp: Integer;
+  LText: string;
+  LLen, LStep, LPerp: Integer;
   LStart, LIdx, I, J: Integer;
   LHasBefore, LHasAfter: Boolean;
   LHasPerpLo, LHasPerpHi: Boolean;
-  LCell: IXwLetter;
-  LOwner: Integer;
+  LOwner, LRun, LRescuedCount: Integer;
   LRescued: array [0 .. XW_MAX_RESCUE - 1] of Integer;
-  LRescuedCount: Integer;
   LKnown: Boolean;
-  LRun: Integer;
+  LMask: Byte;
 begin
   APlacement.Rescue := 0;
   APlacement.Crossings := 0;
@@ -255,28 +279,33 @@ begin
   LRescuedCount := 0;
   LRun := 0;
 
-  if AWord.Length < 2 then Exit(False);
+  LText := AWord.Word;
+  LLen := Length(LText);
+  if LLen < 2 then Exit(False);
+
   if (APlacement.H < 0) or (APlacement.V < 0)
     or (APlacement.H >= FMatrix.HSize) or (APlacement.V >= FMatrix.VSize) then
     Exit(False);
 
   if APlacement.Direction = wdHorizontal then
   begin
-    if APlacement.H + AWord.Length > FMatrix.HSize then Exit(False);
+    if APlacement.H + LLen > FMatrix.HSize then Exit(False);
     LStep := 1;
     LPerp := FMatrix.HSize;
+    LMask := XW_DIR_H;
     LHasBefore := APlacement.H > 0;
-    LHasAfter  := APlacement.H + AWord.Length < FMatrix.HSize;
+    LHasAfter  := APlacement.H + LLen < FMatrix.HSize;
     LHasPerpLo := APlacement.V > 0;
     LHasPerpHi := APlacement.V < FMatrix.VSize - 1;
   end
   else
   begin
-    if APlacement.V + AWord.Length > FMatrix.VSize then Exit(False);
+    if APlacement.V + LLen > FMatrix.VSize then Exit(False);
     LStep := FMatrix.HSize;
     LPerp := 1;
+    LMask := XW_DIR_V;
     LHasBefore := APlacement.V > 0;
-    LHasAfter  := APlacement.V + AWord.Length < FMatrix.VSize;
+    LHasAfter  := APlacement.V + LLen < FMatrix.VSize;
     LHasPerpLo := APlacement.H > 0;
     LHasPerpHi := APlacement.H < FMatrix.HSize - 1;
   end;
@@ -284,17 +313,17 @@ begin
   LStart := APlacement.V * FMatrix.HSize + APlacement.H;
   APlacement.StartIndex := LStart;
 
-  if LHasBefore and FMatrix.IsOccupied(LStart - LStep) then Exit(False);
-  if LHasAfter and FMatrix.IsOccupied(LStart + LStep * AWord.Length) then Exit(False);
+  if LHasBefore and (FChars[LStart - LStep] <> #0) then Exit(False);
+  if LHasAfter and (FChars[LStart + LStep * LLen] <> #0) then Exit(False);
 
   LIdx := LStart;
-  for I := 1 to AWord.Length do
+  for I := 1 to LLen do
   begin
-    if FMatrix.IsOccupied(LIdx) then
+    if FChars[LIdx] <> #0 then
     begin
-      LCell := FMatrix.Flat[LIdx];
-      if LCell.Original <> AWord.GetLetter(I).Original then Exit(False);
-      if APlacement.Direction in LCell.UsedDirections then Exit(False);
+      if FChars[LIdx] <> LText[I] then Exit(False);
+      if (FDirs[LIdx] and LMask) <> 0 then Exit(False);
+
       Inc(APlacement.Crossings);
       if I <= 32 then
         APlacement.CrossMask := APlacement.CrossMask or (UInt32(1) shl (I - 1));
@@ -320,8 +349,8 @@ begin
     end
     else
     begin
-      if LHasPerpLo and FMatrix.IsOccupied(LIdx - LPerp) then Exit(False);
-      if LHasPerpHi and FMatrix.IsOccupied(LIdx + LPerp) then Exit(False);
+      if LHasPerpLo and (FChars[LIdx - LPerp] <> #0) then Exit(False);
+      if LHasPerpHi and (FChars[LIdx + LPerp] <> #0) then Exit(False);
       Inc(LRun);
       if LRun > APlacement.MaxRun then APlacement.MaxRun := LRun;
     end;
@@ -381,6 +410,8 @@ begin
   begin
     FMatrix.Flat[LIdx] := nil;
     FCellWord[LIdx] := -1;
+    FChars[LIdx] := #0;
+    FDirs[LIdx] := 0;
   end;
 
   FTouched.Clear;
@@ -400,10 +431,11 @@ var
   LCell, LLetter: IXwLetter;
   LPlaced: TXwPlacedWord;
   LPosition: TXwLetterPosition;
+  LMask: Byte;
 begin
   case APlacement.Direction of
-    wdHorizontal: LStep := 1;
-    wdVertical:   LStep := FMatrix.HSize;
+    wdHorizontal: begin LStep := 1;               LMask := XW_DIR_H; end;
+    wdVertical:   begin LStep := FMatrix.HSize;   LMask := XW_DIR_V; end;
     else raise EXwError.Create('TXwBoard.PlaceWord: Unknown direction.');
   end;
 
@@ -425,6 +457,7 @@ begin
     begin
       AWord.CrossAt(I, LCell);
       LCell.AddDirection(APlacement.Direction, LPosition);
+      FDirs[LIdx] := FDirs[LIdx] or LMask;
 
       LOwner := FCellWord[LIdx];
       if LOwner >= 0 then
@@ -437,6 +470,8 @@ begin
     begin
       LLetter := AWord[I];
       FMatrix.Flat[LIdx] := LLetter;
+      FChars[LIdx] := LLetter.Original;
+      FDirs[LIdx] := LMask;
       FAnchors.Add(LLetter.Original, LIdx);
       LLetter.AddDirection(APlacement.Direction, LPosition);
       FTouched.Add(LIdx);
@@ -552,50 +587,60 @@ end;
 
 function TXwBoard.EnumeratePlacements(const AWord: IXwWord): TArray<TXwWordPlacement>;
 var
-  LAnchor: IXwLetter;
-  LLetter: Char;
-  LPos, LSlot, LGrid, LCount, J: Integer;
+  LText: string;
+  LPos, LLen, LSlot, LAt, LGrid, LCount, LKey: Integer;
   LPlacement: TXwWordPlacement;
-  LDuplicate: Boolean;
+  LDirs: Byte;
 begin
   SetLength(Result, 16);
   LCount := 0;
 
-  for LPos := 1 to AWord.Length do
-  begin
-    LLetter := AWord.GetLetter(LPos).Original;
-    LSlot := 0;
-    while LSlot < FAnchors.CountOf(LLetter) do
-    begin
-      LGrid := FAnchors.PositionAt(LLetter, LSlot);
-      LAnchor := FMatrix.Flat[LGrid];
+  LText := AWord.Word;
+  LLen := Length(LText);
 
-      if not LAnchor.CanAnchor(LPlacement.Direction) then
+  if FStampGen = MaxInt then
+  begin
+    for LAt := 0 to High(FStamp) do
+      FStamp[LAt] := 0;
+    FStampGen := 0;
+  end;
+  Inc(FStampGen);
+
+  for LPos := 1 to LLen do
+  begin
+    LSlot := FAnchors.SlotOf(LText[LPos]);
+    LAt := 0;
+
+    while LAt < FAnchors.CountAt(LSlot) do
+    begin
+      LGrid := FAnchors.GridAt(LSlot, LAt);
+      LDirs := FDirs[LGrid];
+
+      if (LDirs = 0) or (LDirs = XW_DIR_BOTH) then
       begin
-        FAnchors.RemoveAt(LLetter, LSlot);
+        FAnchors.DropAt(LSlot, LAt);
         Continue;
       end;
 
-      FMatrix.CoordsOf(LGrid, LPlacement.H, LPlacement.V);
+      if (LDirs and XW_DIR_H) <> 0 then
+        LPlacement.Direction := wdVertical
+      else
+        LPlacement.Direction := wdHorizontal;
 
-      case LPlacement.Direction of
-        wdHorizontal: Dec(LPlacement.H, LPos - 1);
-        wdVertical:   Dec(LPlacement.V, LPos - 1);
-      end;
+      LPlacement.V := LGrid div FMatrix.HSize;
+      LPlacement.H := LGrid - LPlacement.V * FMatrix.HSize;
+
+      if LPlacement.Direction = wdHorizontal then
+        Dec(LPlacement.H, LPos - 1)
+      else
+        Dec(LPlacement.V, LPos - 1);
 
       if CanPlaceWord(AWord, LPlacement) then
       begin
-        LDuplicate := False;
-        for J := 0 to LCount - 1 do
-          if (Result[J].StartIndex = LPlacement.StartIndex)
-            and (Result[J].Direction = LPlacement.Direction) then
-          begin
-            LDuplicate := True;
-            Break;
-          end;
-
-        if not LDuplicate then
+        LKey := LPlacement.StartIndex * 2 + Ord(LPlacement.Direction);
+        if FStamp[LKey] <> FStampGen then
         begin
+          FStamp[LKey] := FStampGen;
           if LCount = Length(Result) then
             SetLength(Result, LCount * 2);
           Result[LCount] := LPlacement;
@@ -603,7 +648,7 @@ begin
         end;
       end;
 
-      Inc(LSlot);
+      Inc(LAt);
     end;
   end;
 

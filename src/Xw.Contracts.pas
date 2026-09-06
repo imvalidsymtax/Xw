@@ -150,6 +150,8 @@ type
 
     function LetterAt(const AH, AV: Integer): IXwLetter;
     function IsOccupied(const AH, AV: Integer): Boolean;
+    function CellChar(const AH, AV: Integer): Char;
+    function CellState(const AH, AV: Integer): Byte;
 
     function GetWordCount: Integer;
     function GetPlacedWord(const AIndex: Integer): TXwPlacedWord;
