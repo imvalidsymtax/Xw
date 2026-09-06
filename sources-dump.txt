@@ -1,0 +1,1784 @@
+﻿// dump: C:\Users\Paweł\Documents\Embarcadero\Studio\Projects\xw
+// data: 2026-09-04 13:16:05
+// plikow: 8
+
+==============================================================================
+=== src\Xw.Anchors.pas
+==============================================================================
+
+unit Xw.Anchors;
+
+interface
+
+uses
+  System.Generics.Collections, Xw.Contracts;
+
+type
+  TXwAnchorIndex = class
+  strict private
+    FLang: IXwLang;
+    FBuckets: TArray<TList<Integer>>;
+    FMarks: TArray<Integer>;
+    function BucketOf(const ALetter: Char): TList<Integer>;
+  public
+    constructor Create(const ALang: IXwLang);
+    destructor Destroy; override;
+
+    procedure Add(const ALetter: Char; const AGridIndex: Integer);
+    function Positions(const ALetter: Char): TList<Integer>;
+    function CountOf(const ALetter: Char): Integer;
+
+    procedure Mark;
+    procedure Rollback;
+    procedure Clear;
+  end;
+
+implementation
+
+uses
+  System.SysUtils;
+
+constructor TXwAnchorIndex.Create(const ALang: IXwLang);
+var
+  I: Integer;
+begin
+  inherited Create;
+  FLang := ALang;
+  SetLength(FBuckets, FLang.LetterCount);
+  SetLength(FMarks, FLang.LetterCount);
+  for I := 0 to High(FBuckets) do
+    FBuckets[I] := TList<Integer>.Create;
+end;
+
+destructor TXwAnchorIndex.Destroy;
+var
+  I: Integer;
+begin
+  for I := 0 to High(FBuckets) do
+    FBuckets[I].Free;
+  inherited;
+end;
+
+function TXwAnchorIndex.BucketOf(const ALetter: Char): TList<Integer>;
+var
+  LIndex: Integer;
+begin
+  LIndex := FLang.IndexOf(ALetter);
+  if LIndex < 0 then
+    raise EXwError.CreateFmt(
+      'TXwAnchorIndex: character "%s" out of alphabet %s', [ALetter, FLang.Name]);
+  Result := FBuckets[LIndex];
+end;
+
+procedure TXwAnchorIndex.Add(const ALetter: Char; const AGridIndex: Integer);
+begin
+  BucketOf(ALetter).Add(AGridIndex);
+end;
+
+function TXwAnchorIndex.Positions(const ALetter: Char): TList<Integer>;
+begin
+  Result := BucketOf(ALetter);
+end;
+
+function TXwAnchorIndex.CountOf(const ALetter: Char): Integer;
+begin
+  Result := BucketOf(ALetter).Count;
+end;
+
+procedure TXwAnchorIndex.Mark;
+var
+  I: Integer;
+begin
+  for I := 0 to High(FBuckets) do
+    FMarks[I] := FBuckets[I].Count;
+end;
+
+procedure TXwAnchorIndex.Rollback;
+var
+  I: Integer;
+begin
+  for I := 0 to High(FBuckets) do
+    FBuckets[I].Count := FMarks[I];
+end;
+
+procedure TXwAnchorIndex.Clear;
+var
+  I: Integer;
+begin
+  for I := 0 to High(FBuckets) do
+  begin
+    FBuckets[I].Clear;
+    FMarks[I] := 0;
+  end;
+end;
+
+end.
+
+
+==============================================================================
+=== src\Xw.Board.pas
+==============================================================================
+
+unit Xw.Board;
+
+{$B-}
+
+interface
+
+uses
+  System.Generics.Collections,
+  System.SysUtils,
+  Xw.Anchors,
+  Xw.Contracts,
+  Xw.Grid;
+
+type
+
+  TXwBoard = class (TInterfacedObject, IXwBoard)
+    strict private
+      FWordCross: TList<Integer>;              // rownolegly do FWords: biezaca liczba skrzyzowan slowa
+      FCellWord: TDictionary<Integer, Integer>; // plaski indeks -> indeks slowa, ktore polozylo litere
+
+      FWords: TList<TXwPlacedWord>;
+      FMatrix: TXwGrid<IXwLetter>;
+      FAnchors: TXwAnchorIndex;
+      FTouched: TList<Integer>;
+
+      FDominantDirection: TXwWordDirection;
+      FStrategy: TXwStrategy;
+
+      // agregaty stanu planszy (krok 4) - pozwalaja liczyc score przyrostowo,
+      // bez przelotu po calym gridzie
+      FBounds: TXwBounds;
+      FLetterCount: Integer;
+      FCrossingCount: Integer;
+
+      // wagi funkcji oceny (krok 5)
+      FWeightCrossing: Double;
+      FWeightArea: Double;
+      FWeightRescue: Double;
+
+      FScoreCrossing: Double;
+      FScoreWord: Double;
+      FScoreDensity: Double;
+      FScoreOrphan: Double;
+
+      function GetHSize: Integer;
+      function GetVSize: Integer;
+
+      procedure ExpandBounds(const AH, AV: Integer); inline;
+    function BoundsAfter(const AWord: IXwWord;
+      const APlacement: TXwWordPlacement): TXwBounds;
+
+      procedure PlaceWord(const AWord: IXwWord; const APlacement: TXwWordPlacement);
+      function PlaceFirst(const AWord: IXwWord): Boolean;
+
+      function CanPlaceWord(const AWord: IXwWord; var APlacement: TXwWordPlacement): Boolean;
+
+      // faza 1: zbierz wszystkie dopuszczalne warianty (nic nie zapisuje)
+      function EnumeratePlacements(const AWord: IXwWord): TArray<TXwWordPlacement>;
+      // faza 2: oceniaj i wybierz
+      function ScorePlacement(const AWord: IXwWord; const APlacement: TXwWordPlacement): Double;
+      function ChoosePlacement(const AVariants: TArray<TXwWordPlacement>): Integer;
+
+      // nieuzywane przy pelnej enumeracji; przydatne, gdy zaczniesz ja przycinac
+      function OrderedPositions(const AWord: IXwWord): TArray<Integer>;
+
+      function GetStrategy: TXwStrategy;
+      procedure SetStrategy(const Value: TXwStrategy);
+      function GetWeightRescue: Double;
+      procedure SetWeightRescue(const Value: Double);
+
+
+
+    public
+
+    
+      constructor Create(const AHSize, AVSize: Integer; const ALang: IXwLang);
+      destructor Destroy; override;
+
+      function TryPlaceWord(const AWord: IXwWord): Boolean;
+
+      function GetBounds: TXwBounds;
+      
+      function Evaluate: TXwBoardScore;
+
+      procedure PrintToConsole(const ShowOriginal: Boolean = false);
+
+      function GetPlacedWord(const AIndex: Integer): TXwPlacedWord;
+      function GetWordCount: Integer;
+      function IsOccupied(const AH, AV: Integer): Boolean;
+      function LetterAt(const AH, AV: Integer): IXwLetter;
+
+      property Strategy: TXwStrategy read GetStrategy write SetStrategy;
+      property DominantDirection: TXwWordDirection
+        read FDominantDirection write FDominantDirection;
+
+      property WeightCrossing: Double read FWeightCrossing write FWeightCrossing;
+      property WeightArea: Double read FWeightArea write FWeightArea;
+      property WeightRescue: Double read GetWeightRescue write SetWeightRescue;
+      property ScoreCrossing: Double read FScoreCrossing write FScoreCrossing;
+      property ScoreWord: Double read FScoreWord write FScoreWord;
+      property ScoreDensity: Double read FScoreDensity write FScoreDensity;
+      property ScoreOrphan: Double read FScoreOrphan write FScoreOrphan;
+
+      procedure Clear;
+      procedure Reset;
+  end;
+
+implementation
+
+uses
+  System.Math,
+  System.Generics.Defaults;
+
+{ TXwBoard }
+
+function TXwBoard.LetterAt(const AH, AV: Integer): IXwLetter;
+begin
+  if not FMatrix.InBounds(AH, AV) then
+    Exit(nil);
+  Result := FMatrix[AH, AV];
+end;
+
+function TXwBoard.IsOccupied(const AH, AV: Integer): Boolean;
+begin
+  Result := FMatrix.InBounds(AH, AV)
+    and FMatrix.IsOccupied(FMatrix.IndexOf(AH, AV));
+end;
+
+function TXwBoard.GetWeightRescue: Double;
+begin
+  Result := FWeightRescue;
+end;
+
+function TXwBoard.GetWordCount: Integer;
+begin
+  Result := FWords.Count;
+end;
+
+function TXwBoard.GetPlacedWord(const AIndex: Integer): TXwPlacedWord;
+begin
+  if (AIndex < 0) or (AIndex >= FWords.Count) then
+    raise EXwError.CreateFmt(
+      'TXwBoard.GetPlacedWord: Out of bounds [0..%d]', [FWords.Count - 1]);
+  Result := FWords[AIndex];
+end;
+
+function TXwBoard.GetStrategy: TXwStrategy;
+begin
+  Result := FStrategy;
+end;
+
+function TXwBoard.GetBounds: TXwBounds;
+begin
+  Result := FBounds;   // kopia - wolajacy nie zepsuje stanu planszy
+end;
+
+function TXwBoard.CanPlaceWord(const AWord: IXwWord; var APlacement: TXwWordPlacement): Boolean;
+var
+  LStep, LPerp: Integer;
+  LStart, LIdx, I: Integer;
+  LHasBefore, LHasAfter: Boolean;
+  LHasPerpLo, LHasPerpHi: Boolean;
+  LCell: IXwLetter;
+  LOwner: Integer;
+begin
+  APlacement.Rescue := 0;
+  APlacement.Crossings := 0;
+  APlacement.NewLetters := 0;
+  APlacement.StartIndex := -1;
+  APlacement.Score := 0;
+
+  if AWord.Length < 2 then Exit(False);
+  if (APlacement.H < 0) or (APlacement.V < 0) or (APlacement.H >= FMatrix.HSize) or (APlacement.V >= FMatrix.VSize) then
+    Exit(False);
+
+  if APlacement.Direction = wdHorizontal then
+  begin
+    if APlacement.H + AWord.Length > FMatrix.HSize then Exit(False);
+    LStep := 1;
+    LPerp := FMatrix.HSize;
+    LHasBefore := APlacement.H > 0;                              // konieczne: krok �1 zawija wiersz
+    LHasAfter  := APlacement.H + AWord.Length < FMatrix.HSize;   // konieczne: j.w.
+    LHasPerpLo := APlacement.V > 0;                              // pokryte przez IsOccupied
+    LHasPerpHi := APlacement.V < FMatrix.VSize - 1;              // pokryte przez IsOccupied
+  end
+  else
+  begin
+    if APlacement.V + AWord.Length > FMatrix.VSize then Exit(False);
+    LStep := FMatrix.HSize;
+    LPerp := 1;
+    LHasBefore := APlacement.V > 0;                              // pokryte przez IsOccupied
+    LHasAfter  := APlacement.V + AWord.Length < FMatrix.VSize;   // pokryte przez IsOccupied
+    LHasPerpLo := APlacement.H > 0;                              // konieczne: krok �1 zawija wiersz
+    LHasPerpHi := APlacement.H < FMatrix.HSize - 1;              // konieczne: j.w.
+  end;
+
+  LStart := APlacement.V * FMatrix.HSize + APlacement.H;
+  APlacement.StartIndex := LStart;
+  
+  // pole tu� przed pocz�tkiem i tu� za ko�cem musi by� puste
+  if LHasBefore and FMatrix.IsOccupied(LStart - LStep) then Exit(False);
+  if LHasAfter and FMatrix.IsOccupied(LStart + LStep * AWord.Length) then Exit(False);
+
+  LIdx := LStart;
+  for I := 1 to AWord.Length do
+  begin
+    if FMatrix.IsOccupied(LIdx) then
+    begin
+      // skrzy�owanie: litera musi si� zgadza�, kierunek musi by� wolny
+      LCell := FMatrix.Flat[LIdx];
+      if LCell.Original <> AWord.GetLetter(I).Original then Exit(False);
+      if APlacement.Direction in LCell.UsedDirections then Exit(False);
+      Inc(APlacement.Crossings);
+            // czy ratujemy slowo, ktore dzis prawie nie ma skrzyzowan?
+      if FCellWord.TryGetValue(LIdx, LOwner) then
+        if FWordCross[LOwner] <= 1 then
+          Inc(APlacement.Rescue);
+    end
+    else
+    begin
+      // wolne pole: nie mo�e przylega� do niczego w poprzek
+      if LHasPerpLo and FMatrix.IsOccupied(LIdx - LPerp) then Exit(False);
+      if LHasPerpHi and FMatrix.IsOccupied(LIdx + LPerp) then Exit(False);
+      Inc(APlacement.NewLetters);
+    end;
+
+    Inc(LIdx, LStep);
+  end;
+
+  Result := APlacement.Crossings > 0;
+end;
+
+constructor TXwBoard.Create(const AHSize, AVSize: Integer; const ALang: IXwLang);
+begin
+  inherited Create;
+  
+  FMatrix := TXwGrid<IXwLetter>.Create(AHSize, AVSize); // bez dispoze bo rodzicem letter jest word
+
+  FWords := TList<TXwPlacedWord>.Create;
+
+  FWordCross := TList<Integer>.Create;
+  FCellWord := TDictionary<Integer, Integer>.Create;
+
+  FTouched := TList<Integer>.Create;
+
+  FAnchors := TXwAnchorIndex.Create(ALang);
+
+  FDominantDirection := wdHorizontal;
+  FStrategy := stBestScore;
+
+  // pusty bounding box - celowo odwrocony, pierwszy ExpandBounds go ustawi
+  FBounds := TXwBounds.CreateEmpty;
+  
+  FLetterCount := 0;
+  FCrossingCount := 0;
+  FWeightRescue := 8.0;
+
+  FWeightCrossing := 10.0;     //10
+  FWeightArea     := 1.0;    //0.35
+
+  FScoreCrossing := 10.0;
+  FScoreWord     := 5.0;
+  FScoreDensity  := 100.0;
+  FScoreOrphan   := 8.0;
+end;
+
+destructor TXwBoard.Destroy;
+begin
+  FMatrix.Free;
+  FWords.Free;
+  FWordCross.Free;
+  FCellWord.Free;
+  FAnchors.Free;
+  FTouched.Free;
+  inherited;
+end;
+
+function TXwBoard.GetHSize: Integer;
+begin
+  Result := FMatrix.HSize;
+end;
+
+function TXwBoard.GetVSize: Integer;
+begin
+  Result := FMatrix.VSize;
+end;
+
+procedure TXwBoard.PrintToConsole(const ShowOriginal: Boolean);
+begin
+  FMatrix.Dump(
+    function (const AValue: IXwLetter; const H, V: Integer; var CDLeft, CDRight: Char): Char
+    begin
+      if AValue = nil then begin
+        Result := ' ';
+        Exit;
+      end;
+
+      if ShowOriginal then
+        Result := AValue.Original
+      else
+        Result := AValue.Matched;
+
+      if (AValue.First[wdHorizontal] = lpFirst) and (AValue.First[wdVertical] = lpFirst) then begin
+        CDRight := '/';
+      end else if (AValue.First[wdHorizontal] = lpFirst) then
+        CDRight := '>'
+      else if (AValue.First[wdVertical] = lpFirst) then
+        CDRight := 'V';
+
+      {
+      if AValue.First then begin
+        CDLeft := '{';
+        if AValue.UsedDirections = [wdHorizontal, wdVertical] then begin
+          CDLeft := 'V';
+          CDRight := '>';
+        end else if wdHorizontal in AValue.UsedDirections then
+          CDRight := '>'
+        else
+          CDRight := 'V';
+        
+      end; }
+       
+
+      if Result = #0 then Result := '?';
+    end
+  );
+end;
+
+// przebudowa
+procedure TXwBoard.Clear;
+var
+  LWord: TXwPlacedWord;
+  LIdx: Integer;
+begin
+
+  FBounds := TXwBounds.CreateEmpty;
+
+  FLetterCount := 0;
+  FCrossingCount := 0;
+
+  // przywraca literki w słowach (właściciel pierwotnej ustawia ją sobie z powrotem); w literach useddirection też się resetuje
+  for LWord in FWords do
+    LWord.Word.Rebuild;
+
+  FWords.Clear;
+  FAnchors.Clear;
+  FWordCross.Clear;
+  FCellWord.Clear;
+
+  for LIdx in FTouched do
+    FMatrix.Flat[LIdx] := nil;
+
+  FTouched.Clear;
+end;
+
+// krzyżówka -> nierozwiązana
+procedure TXwBoard.Reset;
+var
+  LWord: TXwPlacedWord;
+begin
+  for LWord in FWords do
+    LWord.Word.Reset;
+end;
+
+procedure TXwBoard.PlaceWord(const AWord: IXwWord; const APlacement: TXwWordPlacement);
+var
+  I, LIdx, LStep, LNewIndex, LOwner: Integer;
+  LCell, LLetter: IXwLetter;
+  LPlaced: TXwPlacedWord;
+  LPosition: TXwLetterPosition;
+begin
+  case APlacement.Direction of
+    wdHorizontal: LStep := 1;
+    wdVertical:   LStep := FMatrix.HSize;
+    else raise EXwError.Create('TXwBoard.PlaceWord: Unknown direction.');
+  end;
+
+  LNewIndex := FWords.Count;                              // indeks, ktory dostanie to slowo
+  LIdx := FMatrix.IndexOf(APlacement.H, APlacement.V);
+
+  for I := 1 to AWord.Length do
+  begin
+    if I = 1 then
+      LPosition := lpFirst
+    else if I = AWord.Length then
+      LPosition := lpLast
+    else
+      LPosition := lpMiddle;
+
+    LCell := FMatrix.Flat[LIdx];
+
+    if LCell <> nil then
+    begin
+      // skrzyzowanie: przejmij obiekt sasiada i dopisz kierunek
+      AWord.CrossAt(I, LCell);
+      LCell.AddDirection(APlacement.Direction, LPosition);
+
+      if FCellWord.TryGetValue(LIdx, LOwner) then
+      begin
+        Assert(LOwner < LNewIndex,
+          'TXwBoard.PlaceWord: slowo krzyzuje samo siebie');
+        FWordCross[LOwner] := FWordCross[LOwner] + 1;
+      end;
+    end
+    else
+    begin
+      LLetter := AWord[I];
+      FMatrix.Flat[LIdx] := LLetter;
+      FAnchors.Add(LLetter.Original, LIdx);
+      LLetter.AddDirection(APlacement.Direction, LPosition);
+      FTouched.Add(LIdx);
+      FCellWord.Add(LIdx, LNewIndex);
+      Inc(FLetterCount);
+    end;
+
+    Inc(LIdx, LStep);
+  end;
+
+  Inc(FCrossingCount, APlacement.Crossings);
+  ExpandBounds(APlacement.H, APlacement.V);
+  case APlacement.Direction of
+    wdHorizontal: ExpandBounds(APlacement.H + AWord.Length - 1, APlacement.V);
+    wdVertical:   ExpandBounds(APlacement.H, APlacement.V + AWord.Length - 1);
+  end;
+
+  // kolejnosc krytyczna: FWordCross i FWords musza rosnac razem
+  FWordCross.Add(APlacement.Crossings);
+  LPlaced.Word := AWord;
+  LPlaced.Placement := APlacement;
+  FWords.Add(LPlaced);
+end;
+
+procedure TXwBoard.ExpandBounds(const AH, AV: Integer);
+begin
+  if AH < FBounds.MinH then FBounds.MinH := AH;
+  if AH > FBounds.MaxH then FBounds.MaxH := AH;
+  if AV < FBounds.MinV then FBounds.MinV := AV;
+  if AV > FBounds.MaxV then FBounds.MaxV := AV;
+end;
+
+function TXwBoard.BoundsAfter(const AWord: IXwWord;
+  const APlacement: TXwWordPlacement): TXwBounds;
+var
+  LEndH, LEndV: Integer;
+begin
+  LEndH := APlacement.H;
+  LEndV := APlacement.V;
+  case APlacement.Direction of
+    wdHorizontal: Inc(LEndH, AWord.Length - 1);
+    wdVertical:   Inc(LEndV, AWord.Length - 1);
+  end;
+
+  Result.MinH := Min(FBounds.MinH, APlacement.H);
+  Result.MaxH := Max(FBounds.MaxH, LEndH);
+  Result.MinV := Min(FBounds.MinV, APlacement.V);
+  Result.MaxV := Max(FBounds.MaxV, LEndV);
+end;
+
+function TXwBoard.PlaceFirst(const AWord: IXwWord): Boolean;
+var
+  LPlacement: TXwWordPlacement;
+begin
+  // slowo musi sie zmiescic w ktorymkolwiek kierunku
+  if (AWord.Length > FMatrix.HSize) and (AWord.Length > FMatrix.VSize) then
+    Exit(False);
+
+  LPlacement.Direction := FDominantDirection;
+  if (LPlacement.Direction = wdHorizontal) and (AWord.Length > FMatrix.HSize) then
+    LPlacement.Direction := wdVertical
+  else if (LPlacement.Direction = wdVertical) and (AWord.Length > FMatrix.VSize) then
+    LPlacement.Direction := wdHorizontal;
+
+  case LPlacement.Direction of
+    wdHorizontal:
+      begin
+        LPlacement.H := (FMatrix.HSize - AWord.Length) div 2;
+        LPlacement.V := FMatrix.VSize div 2;
+      end;
+    wdVertical:
+      begin
+        LPlacement.H := FMatrix.HSize div 2;
+        LPlacement.V := (FMatrix.VSize - AWord.Length) div 2;
+      end;
+  end;
+
+  // metryki ustawiane recznie - CanPlaceWord tu nie przechodzi,
+  // bo wymaga co najmniej jednego skrzyzowania
+  LPlacement.StartIndex := FMatrix.IndexOf(LPlacement.H, LPlacement.V);
+  LPlacement.Crossings  := 0;
+  LPlacement.NewLetters := AWord.Length;
+  LPlacement.Score      := 0;
+  LPlacement.Rescue := 0;
+
+  PlaceWord(AWord, LPlacement);
+  Result := True;
+end;
+
+function TXwBoard.EnumeratePlacements(const AWord: IXwWord): TArray<TXwWordPlacement>;
+var
+  LAnchor: IXwLetter;
+  LPos, LIndex, LCount, J: Integer;
+  LPlacement: TXwWordPlacement;
+  LDuplicate: Boolean;
+begin
+
+  SetLength(Result, 16);
+  LCount := 0;
+
+  // pelna enumeracja - kolejnosc pozycji nie wplywa na wynik,
+  // wiec OrderedPositions tu nie uzywamy
+  for LPos := 1 to AWord.Length do
+
+    // iteruj po pozycjach istniejacych juz literek.
+    // UWAGA: to jest zywa lista z FAnchors - w tej petli nic nie wolno zapisywac
+    for LIndex in FAnchors.Positions(AWord[LPos].Original) do
+    begin
+      LAnchor := FMatrix.Flat[LIndex];
+
+      // sprawdza czy mozna podpiac i zwraca wymuszony kierunek
+      if not LAnchor.CanAnchor(LPlacement.Direction) then Continue;
+
+      FMatrix.CoordsOf(LIndex, LPlacement.H, LPlacement.V);
+
+      // cofnij sie od kotwicy do poczatku slowa (LPos jest 1-based)
+      case LPlacement.Direction of
+        wdHorizontal: Dec(LPlacement.H, LPos - 1);
+        wdVertical:   Dec(LPlacement.V, LPos - 1);
+      end;
+
+      // wypelnia rowniez metryki: StartIndex, Crossings, NewLetters
+      if not CanPlaceWord(AWord, LPlacement) then Continue;
+
+      // deduplikacja: slowo przechodzace przez dwie kotwice zostanie
+      // znalezione dwa razy jako ten sam (StartIndex, Direction)
+      LDuplicate := False;
+      for J := 0 to LCount - 1 do
+        if (Result[J].StartIndex = LPlacement.StartIndex)
+          and (Result[J].Direction = LPlacement.Direction) then
+        begin
+          LDuplicate := True;
+          Break;
+        end;
+      if LDuplicate then Continue;
+
+      if LCount = Length(Result) then
+        SetLength(Result, LCount * 2);
+      Result[LCount] := LPlacement;
+
+      Inc(LCount);
+    end;
+
+  SetLength(Result, LCount);
+end;
+
+function TXwBoard.ScorePlacement(const AWord: IXwWord;
+  const APlacement: TXwWordPlacement): Double;
+var
+  LDelta: Integer;
+begin
+  LDelta := BoundsAfter(AWord, APlacement).Area - FBounds.Area;
+  if LDelta < 0 then LDelta := 0;
+
+  Result := FWeightCrossing * APlacement.Crossings
+          - FWeightArea * Sqrt(LDelta)
+          + FWeightRescue * APlacement.Rescue;
+end;
+
+procedure TXwBoard.SetStrategy(const Value: TXwStrategy);
+begin
+  FStrategy := Value;
+end;
+
+procedure TXwBoard.SetWeightRescue(const Value: Double);
+begin
+  FWeightRescue := Value;
+end;
+
+function TXwBoard.ChoosePlacement(const AVariants: TArray<TXwWordPlacement>): Integer;
+var
+  I: Integer;
+  LBest: Double;
+begin
+  Result := 0;
+  if FStrategy = stFirstFit then Exit;
+
+  LBest := AVariants[0].Score;
+  for I := 1 to High(AVariants) do
+    if AVariants[I].Score > LBest then
+    begin
+      LBest := AVariants[I].Score;
+      Result := I;
+    end;
+end;
+
+function TXwBoard.OrderedPositions(const AWord: IXwWord): TArray<Integer>;
+var
+  LCosts: TArray<Integer>;
+  I: Integer;
+begin
+  SetLength(Result, AWord.Length);
+  SetLength(LCosts, AWord.Length);
+  for I := 0 to AWord.Length - 1 do
+  begin
+    Result[I] := I + 1;                                   // pozycja 1-based
+    LCosts[I] := FAnchors.CountOf(AWord.GetLetter(I + 1).Original);
+  end;
+
+  TArray.Sort<Integer>(Result, TComparer<Integer>.Construct(
+    function(const L, R: Integer): Integer
+    begin
+      Result := LCosts[L - 1] - LCosts[R - 1];
+    end));
+end;
+
+function TXwBoard.TryPlaceWord(const AWord: IXwWord): Boolean;
+var
+  LVariants: TArray<TXwWordPlacement>;
+  I, LChoice: Integer;
+begin
+  // etap 0 -> jesli brak slow to dodaje na srodek
+  if FWords.Count = 0 then Exit(PlaceFirst(AWord));
+
+  LVariants := EnumeratePlacements(AWord);
+  if Length(LVariants) = 0 then Exit(False);
+
+  if FStrategy <> stFirstFit then
+    for I := 0 to High(LVariants) do
+      LVariants[I].Score := ScorePlacement(AWord, LVariants[I]);
+
+  LChoice := ChoosePlacement(LVariants);
+  PlaceWord(AWord, LVariants[LChoice]);
+  Result := True;
+end;
+
+function TXwBoard.Evaluate: TXwBoardScore;
+var
+  LCross: Integer;
+  {$IFOPT C+} LSum: Integer; {$ENDIF}
+begin
+  Result.Words     := FWords.Count;
+  Result.Letters   := FLetterCount;
+  Result.Crossings := FCrossingCount;
+  Result.Area      := FBounds.Area;
+
+  if Result.Area = 0 then
+    Result.Density := 0
+  else
+    Result.Density := Result.Letters / Result.Area;
+
+  Result.Orphans := 0;
+  Result.MinCross := 0;
+  {$IFOPT C+} LSum := 0; {$ENDIF}
+
+  if FWordCross.Count > 0 then
+  begin
+    Result.MinCross := MaxInt;
+    for LCross in FWordCross do
+    begin
+      if LCross <= 1 then Inc(Result.Orphans);
+      if LCross < Result.MinCross then Result.MinCross := LCross;
+      {$IFOPT C+} Inc(LSum, LCross); {$ENDIF}
+    end;
+  end;
+
+  {$IFOPT C+}
+  Assert(FWordCross.Count = FWords.Count,
+    Format('FWordCross=%d <> FWords=%d', [FWordCross.Count, FWords.Count]));
+  Assert(LSum = 2 * FCrossingCount,
+    Format('suma FWordCross=%d <> 2*FCrossingCount=%d', [LSum, 2 * FCrossingCount]));
+  {$ENDIF}
+
+  if Result.Words > 0 then
+    Result.AvgCross := 2.0 * Result.Crossings / Result.Words
+  else
+    Result.AvgCross := 0;
+
+  Result.Total := Result.Crossings * FScoreCrossing
+                + Result.Words     * FScoreWord
+                + Result.Density   * FScoreDensity
+                - Result.Orphans   * FScoreOrphan;
+
+end;
+
+end.
+
+
+==============================================================================
+=== src\Xw.Contracts.pas
+==============================================================================
+
+unit Xw.Contracts;
+
+{
+  Łącznik dla unitów
+}
+
+interface
+
+uses
+  System.SysUtils;
+
+type
+
+  EXwError = class(Exception);
+
+  IXwWord = interface;
+
+  IXwBoard = interface;
+
+  TXwWordDirection = (
+    wdHorizontal,
+    wdVertical
+  );
+
+  TXwWordPlacement = record
+    H, V: Integer;
+    Direction: TXwWordDirection;
+    StartIndex: Integer;
+    Crossings: Integer;
+    NewLetters: Integer;
+    Rescue: Integer;       // ile kotwic nalezy do slow z <= 1 skrzyzowaniem
+    Score: Double;
+  end;
+
+  TXwWordDirections = set of TXwWordDirection;
+
+  TXwPlacedWord = record
+    Word: IXwWord;
+    Placement: TXwWordPlacement;
+  end;
+
+  TXwLetterPosition = (lpNone, lpFirst, lpMiddle, lpLast); // koniecznie lpNone pierwsze
+
+  IXwLang = interface
+    ['{A87D3B25-206A-4040-AF9D-D12014194029}']
+    function GetName: string;
+    property Name: string read GetName;
+
+
+    function GetLetterCount: Integer;
+    property LetterCount: Integer read GetLetterCount;
+    function LetterAt(const AIndex: Integer): Char;
+    function IndexOf(const ALetter: Char): Integer;   // -1 = poza alfabetem
+
+    function IsValid(const AWord: string; out AMessage: string): Boolean;
+    function Normalize(const AWord: string): string; overload;
+    function Normalize(const ALetter: Char): Char; overload;
+    function TryPrepare(const ARaw: string; out AWord: string; out AMessage: string): Boolean;
+  end;
+
+  IXwLetter = interface
+    ['{24E0A18A-ABFF-4293-9252-A5D965ACBEF9}']
+
+      procedure Match(const ALetter: Char);
+
+      function GetFirst(const ADirection: TXwWordDirection): TXwLetterPosition;
+      function GetLast(const ADirection: TXwWordDirection): TXwLetterPosition;
+
+      function GetOriginal: Char;
+      function GetMatched: Char;
+      function IsGuessed: Boolean;
+
+      function UsedDirections: TXwWordDirections;
+      procedure AddDirection(const ADirection: TXwWordDirection; const APosition: TXwLetterPosition);
+      function CanAnchor(out ADirection: TXwWordDirection): Boolean;
+
+      property Original: Char read GetOriginal;
+      property Matched: Char read GetMatched;
+
+      property First[const ADirection: TXwWordDirection]: TXwLetterPosition read GetFirst;
+      property Last[const ADirection: TXwWordDirection]: TXwLetterPosition read GetLast;
+
+      procedure Rebuild;
+      procedure Reset;
+  end;
+
+  IXwWord = interface
+    ['{F7D57202-9DAA-4D1C-BE60-8DE1F2FF4371}']
+
+    function IsGuessed: Boolean;
+
+    function GetDescription: string;
+    function GetWord: string;
+    function GetLength: Integer;
+    // indexes from 1 to Length such as strings
+    function GetLetter(const APosition: Integer): IXwLetter;
+    procedure CrossAt(const APosition: Integer; const ALetter: IXwLetter);
+
+    property Description: string read GetDescription;
+    property Word: string read GetWord;
+    property Length: Integer read GetLength;
+    property Letters[const APosition: Integer]: IXwLetter read GetLetter; default;
+
+    procedure Rebuild;
+    procedure Reset;
+  end;
+
+  IXwWordFactory = interface
+    ['{1A5A64DD-F44C-444C-A818-73CEBAAB4116}']
+
+    function CreateWord(const AWord, ADescription: string): IXwWord;
+  end;
+
+  TXwBounds = record
+    MinH, MaxH, MinV, MaxV: Integer;
+    function IsEmpty: Boolean; inline;
+    function Width: Integer; inline;
+    function Height: Integer; inline;
+    function Area: Integer; inline;
+    function Contains(const AH, AV: Integer): Boolean; inline;
+    class function CreateEmpty: TXwBounds; static;
+  end;
+
+  TXwStrategy = (stFirstFit, stBestScore);
+
+  TXwBoardScore = record
+    Words: Integer;
+    Letters: Integer;
+    Crossings: Integer;
+    Area: Integer;
+    Density: Double;
+    Orphans: Integer;      // slowa z <= 1 skrzyzowaniem - praktycznie nierozwiazywalne
+    MinCross: Integer;
+    AvgCross: Double;
+    Total: Double;
+  end;
+
+  IXwBoard = interface
+    ['{F160B342-2E13-4993-B545-E4717CA5A338}']
+
+    function GetHSize: Integer;
+    function GetVSize: Integer;
+    property HSize: Integer read GetHSize;
+    property VSize: Integer read GetVSize;
+
+    function GetBounds: TXwBounds;
+    property Bounds: TXwBounds read GetBounds;
+
+    function LetterAt(const AH, AV: Integer): IXwLetter;
+    function IsOccupied(const AH, AV: Integer): Boolean;
+
+    function GetWordCount: Integer;
+    function GetPlacedWord(const AIndex: Integer): TXwPlacedWord;
+    property WordCount: Integer read GetWordCount;
+    property PlacedWords[const AIndex: Integer]: TXwPlacedWord read GetPlacedWord;
+
+    function TryPlaceWord(const AWord: IXwWord): Boolean;
+
+    function GetStrategy: TXwStrategy;
+    procedure SetStrategy(const Value: TXwStrategy);
+
+    function GetWeightRescue: Double;
+      procedure SetWeightRescue(const Value: Double);
+
+    function Evaluate: TXwBoardScore;
+
+    property Strategy: TXwStrategy read GetStrategy write SetStrategy;
+         property WeightRescue: Double read GetWeightRescue write SetWeightRescue;
+
+    procedure PrintToConsole(const ShowOriginal: Boolean);
+
+    procedure Clear;
+    procedure Reset;
+  end;
+
+implementation
+
+{ TXwBounds }
+
+class function TXwBounds.CreateEmpty: TXwBounds;
+begin
+  // celowo odwrocone - pierwszy ExpandBounds ustawi oba konce
+  Result.MinH := MaxInt;  Result.MinV := MaxInt;
+  Result.MaxH := -1;      Result.MaxV := -1;
+end;
+
+function TXwBounds.IsEmpty: Boolean;
+begin
+  Result := MaxH < MinH;
+end;
+
+function TXwBounds.Width: Integer;
+begin
+  if IsEmpty then Exit(0);
+  Result := MaxH - MinH + 1;
+end;
+
+function TXwBounds.Height: Integer;
+begin
+  if IsEmpty then Exit(0);
+  Result := MaxV - MinV + 1;
+end;
+
+function TXwBounds.Area: Integer;
+begin
+  Result := Width * Height;
+end;
+
+function TXwBounds.Contains(const AH, AV: Integer): Boolean;
+begin
+  Result := (AH >= MinH) and (AH <= MaxH) and (AV >= MinV) and (AV <= MaxV);
+end;
+
+end.
+
+
+==============================================================================
+=== src\Xw.Exception.pas
+==============================================================================
+
+unit Xw.Exception;
+
+interface
+
+uses
+  System.SysUtils;
+
+type
+  EXwError = class(Exception);
+
+implementation
+
+end.
+
+
+==============================================================================
+=== src\Xw.Grid.pas
+==============================================================================
+
+unit Xw.Grid;
+
+{$B-}
+
+interface
+
+type
+
+  TXwFreeValueProc<T> = reference to procedure(var AValue: T);
+
+  TXwCellCharFunc<T> = reference to function(const AValue: T; const H, V: Integer; var CDLeft, CDRight: Char): Char;
+
+  TXwGrid<T> = class
+    strict private
+      FData: TArray<T>;
+      FHSize: Integer;
+      FVSize: Integer;
+      FFlatSize: Integer;
+      FOwnsValues: Boolean;
+      FOnFreeValue: TXwFreeValueProc<T>;
+      function GetCell(const H, V: Integer): T; inline;
+      procedure SetCell(const H, V: Integer; const Value: T);
+      procedure FreeValue(var AValue: T);
+      function GetFlat(const AIndex: Integer): T;
+      procedure SetFlat(const AIndex: Integer; const Value: T);
+    public
+      constructor Create(const AHSize, AVSize: Integer;
+        const AOwnsValues: Boolean = False;
+        const AOnFreeValue: TXwFreeValueProc<T> = nil);
+      destructor Destroy; override;
+      procedure Clear;
+      procedure FreeCell(const H, V: Integer);
+      function Extract(const H, V: Integer): T;
+      function IndexOf(const H, V: Integer): Integer; inline;
+      procedure CoordsOf(const Index: Integer; out H, V: Integer); inline;
+      function InBounds(const H, V: Integer): Boolean; inline;
+      property Cells[const H, V: Integer]: T read GetCell write SetCell; default;
+      property Flat[const AIndex: Integer]: T read GetFlat write SetFlat;
+      property HSize: Integer read FHSize;
+      property VSize: Integer read FVSize;
+      property FlatSize: Integer read FFlatSize;
+      property OwnsValues: Boolean read FOwnsValues write FOwnsValues;
+      property OnFreeValue: TXwFreeValueProc<T> read FOnFreeValue write FOnFreeValue;
+      function IsOccupied(const AIndex: Integer): Boolean; inline;
+      procedure Dump(const AGetChar: TXwCellCharFunc<T> = nil);
+  end;
+
+  PObject = ^TObject;
+
+implementation
+
+uses
+  System.SysUtils;
+
+{ TXwGrid<T> }
+
+constructor TXwGrid<T>.Create(const AHSize, AVSize: Integer;
+  const AOwnsValues: Boolean; const AOnFreeValue: TXwFreeValueProc<T>);
+begin
+  inherited Create;
+  if (AHSize <= 0) or (AVSize <= 0) then
+    raise EArgumentOutOfRangeException.Create('TXwGrid: size must be a positive number');
+  FHSize := AHSize;
+  FVSize := AVSize;
+  FFlatSize := FHSize * FVSize;
+  FOwnsValues := AOwnsValues;
+  FOnFreeValue := AOnFreeValue;
+  SetLength(FData, FHSize * FVSize);
+end;
+
+destructor TXwGrid<T>.Destroy;
+begin
+  if FOwnsValues then
+    Clear;
+  inherited;
+end;
+
+procedure TXwGrid<T>.Dump(const AGetChar: TXwCellCharFunc<T>);
+var
+  H, V: Integer;
+  LChar, CDLeft, CDRight: Char;
+  LLine: string;
+begin
+  for V := 0 to FVSize - 1 do
+  begin
+    LLine := '';
+
+    for H := 0 to FHSize - 1 do
+    begin
+      CDLeft := '[';
+      CDRight := ']';
+      if Assigned(AGetChar) then
+        LChar := AGetChar(FData[V * FHSize + H], H, V, CDLeft, CDRight)
+      else
+        LChar := ' ';
+
+      if LLine <> '' then
+        LLine := LLine + ' ';
+      LLine := LLine + CDLeft + LChar + CDRight;
+    end;
+    Writeln(LLine);
+  end;
+end;
+
+procedure TXwGrid<T>.FreeValue(var AValue: T);
+begin
+  if Assigned(FOnFreeValue) then
+    FOnFreeValue(AValue)
+  else if GetTypeKind(T) = tkClass then
+    PObject(@AValue)^.Free
+  else
+    raise EInvalidOpException.Create(
+      'TXwGrid: OwnsValues=True needs OnFreeValue for non-class types');
+  AValue := Default(T);
+end;
+
+procedure TXwGrid<T>.Clear;
+var
+  I: Integer;
+begin
+  for I := 0 to High(FData) do
+  begin
+    if FOwnsValues and (PPointer(@FData[I])^ <> nil) then
+      FreeValue(FData[I])
+    else
+      FData[I] := Default(T);
+  end;
+end;
+
+function TXwGrid<T>.IndexOf(const H, V: Integer): Integer;
+begin
+  Result := V * FHSize + H;
+end;
+
+function TXwGrid<T>.IsOccupied(const AIndex: Integer): Boolean;
+begin
+  Result := (AIndex >= 0) and (AIndex < Length(FData))
+    and (PPointer(@FData[AIndex])^ <> nil);
+end;
+
+procedure TXwGrid<T>.CoordsOf(const Index: Integer; out H, V: Integer);
+begin
+  H := Index mod FHSize;
+  V := Index div FHSize;
+end;
+
+function TXwGrid<T>.InBounds(const H, V: Integer): Boolean;
+begin
+  Result := (Cardinal(H) < Cardinal(FHSize)) and (Cardinal(V) < Cardinal(FVSize));
+end;
+
+function TXwGrid<T>.GetCell(const H, V: Integer): T;
+begin
+  {$IFOPT R+}
+  if not InBounds(H, V) then
+    raise ERangeError.CreateFmt('TXwGrid.GetCell: (%d, %d) out of bounds', [H, V]);
+  {$ENDIF}
+  Result := FData[V * FHSize + H];
+end;
+
+function TXwGrid<T>.GetFlat(const AIndex: Integer): T;
+begin
+  Result := FData[AIndex];
+end;
+
+procedure TXwGrid<T>.FreeCell(const H, V: Integer);
+var
+  Idx: Integer;
+begin
+  if not InBounds(H, V) then
+    raise ERangeError.CreateFmt('TXwGrid.FreeCell: (%d, %d) out of bounds', [H, V]);
+  Idx := V * FHSize + H;
+  if PPointer(@FData[Idx])^ <> nil then
+    FreeValue(FData[Idx]);
+end;
+
+function TXwGrid<T>.Extract(const H, V: Integer): T;
+var
+  Idx: Integer;
+begin
+  if not InBounds(H, V) then
+    raise ERangeError.CreateFmt('TXwGrid.Extract: (%d, %d) out of bounds', [H, V]);
+  Idx := V * FHSize + H;
+  Result := FData[Idx];
+  FData[Idx] := Default(T);
+end;
+
+procedure TXwGrid<T>.SetCell(const H, V: Integer; const Value: T);
+var
+  Idx: Integer;
+begin
+  {$IFOPT R+}
+  if not InBounds(H, V) then
+    raise ERangeError.CreateFmt('TXwGrid.SetCell: (%d, %d) out of bounds', [H, V]);
+  {$ENDIF}
+  Idx := V * FHSize + H;
+  if FOwnsValues and (PPointer(@FData[Idx])^ <> nil)
+    and (PPointer(@FData[Idx])^ <> PPointer(@Value)^) then
+    FreeValue(FData[Idx]);
+  FData[Idx] := Value;
+end;
+
+procedure TXwGrid<T>.SetFlat(const AIndex: Integer; const Value: T);
+begin
+  FData[AIndex] := Value;
+end;
+
+end.
+
+
+==============================================================================
+=== src\Xw.Langs.pas
+==============================================================================
+
+unit Xw.Langs;
+
+interface
+
+uses
+  System.Generics.Collections,
+  Xw.Contracts;
+
+type
+  TXwLangBase = class abstract(TInterfacedObject, IXwLang)
+    strict private
+      FLetters: string;                 // kanoniczne, po jednej na klasę
+      FMinChar, FMaxChar: Word;
+      FIndexMap: TArray<SmallInt>;      // Ord(c) - FMinChar -> indeks klasy
+    protected
+      procedure RegisterVariants(const AMap: TDictionary<Char, Integer>); virtual;
+      function GetMinLength: Integer; virtual;
+      function GetMaxLength: Integer; virtual;
+      function GetName: string; virtual; abstract;
+    public
+      constructor Create(const ALetters: string);
+      function GetLetterCount: Integer;
+      function LetterAt(const AIndex: Integer): Char;
+      function IndexOf(const ALetter: Char): Integer;
+      function Normalize(const AWord: string): string; overload; virtual;
+      function Normalize(const ALetter: Char): Char; overload; virtual;
+      function IsValid(const AWord: string; out AMessage: string): Boolean; virtual;
+      function TryPrepare(const ARaw: string; out AWord, AMessage: string): Boolean;
+  end;
+
+  TXwLangPL = class(TXwLangBase)
+    strict private const
+      CNAME    = 'PL';
+      CLETTERS = 'AĄBCĆDEĘFGHIJKLŁMNŃOÓPQRSŚTUVWXYZŹŻ';
+    strict private
+      FDiacritics: Boolean;
+    protected
+      function GetName: string; override;
+      procedure RegisterVariants(const AMap: TDictionary<Char, Integer>); override;
+    public
+      constructor Create(const ADiacritics: Boolean = True);
+  end;
+
+implementation
+
+uses
+  System.SysUtils, System.RegularExpressions, System.Character;
+
+{ TXwLangBase }
+
+constructor TXwLangBase.Create(const ALetters: string);
+var
+  LMap: TDictionary<Char, Integer>;
+  LPair: TPair<Char, Integer>;
+  I: Integer;
+begin
+  inherited Create;
+  Assert(ALetters <> '', 'TXwLangBase.Create: pusty alfabet');
+  FLetters := ALetters;
+
+  LMap := TDictionary<Char, Integer>.Create;
+  try
+    for I := 1 to Length(FLetters) do
+    begin
+      LMap.AddOrSetValue(FLetters[I], I - 1);
+      LMap.AddOrSetValue(FLetters[I].ToLower, I - 1);
+    end;
+    RegisterVariants(LMap);
+
+    FMinChar := High(Word);
+    FMaxChar := 0;
+    for LPair in LMap do
+    begin
+      if Ord(LPair.Key) < FMinChar then FMinChar := Ord(LPair.Key);
+      if Ord(LPair.Key) > FMaxChar then FMaxChar := Ord(LPair.Key);
+    end;
+
+    SetLength(FIndexMap, FMaxChar - FMinChar + 1);
+    for I := 0 to High(FIndexMap) do
+      FIndexMap[I] := -1;
+    for LPair in LMap do
+      FIndexMap[Ord(LPair.Key) - FMinChar] := LPair.Value;
+  finally
+    LMap.Free;
+  end;
+end;
+
+function TXwLangBase.IndexOf(const ALetter: Char): Integer;
+var
+  LOrd: Word;
+begin
+  LOrd := Ord(ALetter);
+  if (LOrd < FMinChar) or (LOrd > FMaxChar) then
+    Exit(-1);
+  Result := FIndexMap[LOrd - FMinChar];
+end;
+
+function TXwLangBase.Normalize(const ALetter: Char): Char;
+var
+  LIndex: Integer;
+begin
+  LIndex := IndexOf(ALetter);
+  if LIndex < 0 then
+    Exit(ALetter);
+  Result := FLetters[LIndex + 1];
+end;
+
+procedure TXwLangBase.RegisterVariants(const AMap: TDictionary<Char, Integer>);
+begin
+end;
+
+function TXwLangBase.Normalize(const AWord: string): string;
+var
+  I: Integer;
+begin
+  Result := AWord.Trim
+    .Replace(' ', '', [rfReplaceAll])
+    .Replace('-', '', [rfReplaceAll]);
+  for I := 1 to Length(Result) do
+    Result[I] := Normalize(Result[I]);
+end;
+
+function TXwLangBase.IsValid(const AWord: string; out AMessage: string): Boolean;
+var
+  LChar: Char;
+begin
+  AMessage := '';
+  if (Length(AWord) < GetMinLength) or (Length(AWord) > GetMaxLength) then
+  begin
+    AMessage := Format('Fraza "%s": długość poza zakresem %d..%d.',
+      [AWord, GetMinLength, GetMaxLength]);
+    Exit(False);
+  end;
+  for LChar in AWord do
+    if IndexOf(LChar) < 0 then
+    begin
+      AMessage := Format('Fraza "%s": niedozwolony znak "%s".', [AWord, LChar]);
+      Exit(False);
+    end;
+  Result := True;
+end;
+
+function TXwLangBase.GetLetterCount: Integer;
+begin
+  Result := Length(FLetters);
+end;
+
+function TXwLangBase.LetterAt(const AIndex: Integer): Char;
+begin
+  if (AIndex < 0) or (AIndex >= Length(FLetters)) then
+    raise EXwError.CreateFmt(
+      'TXwLangBase.LetterAt: Out of bounds [0..%d]', [Length(FLetters) - 1]);
+  Result := FLetters[AIndex + 1];
+end;
+
+function TXwLangBase.GetMinLength: Integer;
+begin
+  Result := 2;
+end;
+
+function TXwLangBase.GetMaxLength: Integer;
+begin
+  Result := 30;
+end;
+
+function TXwLangBase.TryPrepare(const ARaw: string; out AWord, AMessage: string): Boolean;
+begin
+  AWord := Normalize(ARaw);
+  Result := IsValid(AWord, AMessage);
+end;
+
+{ TXwLangPL }
+
+function TXwLangPL.GetName: string;
+begin
+  Result := CNAME;
+end;
+
+constructor TXwLangPL.Create(const ADiacritics: Boolean = True);
+begin
+  FDiacritics := ADiacritics;
+  inherited Create(CLETTERS);
+end;
+
+procedure TXwLangPL.RegisterVariants(const AMap: TDictionary<Char, Integer>);
+const
+  CDIACRITICS = 'ĄĆĘŁŃÓŚŹŻ';
+  CBASE       = 'ACELNOSZZ';
+var
+  I, LOrd: Integer;
+begin
+  inherited;
+
+  if FDiacritics then Exit;
+  
+
+  for I := 1 to Length(CDIACRITICS) do
+  begin
+    if not AMap.TryGetValue(CBASE[I], LOrd) then
+      raise EXwError.CreateFmt(
+        'TXwLangPL_DNORM: brak litery bazowej "%s" w alfabecie', [CBASE[I]]);
+
+    AMap.AddOrSetValue(CDIACRITICS[I], LOrd);
+    AMap.AddOrSetValue(CDIACRITICS[I].ToLower, LOrd);
+  end;
+end;
+
+end.
+
+
+==============================================================================
+=== src\Xw.Letter.pas
+==============================================================================
+
+unit Xw.Letter;
+
+interface
+
+uses
+  Xw.Contracts,
+
+  System.SysUtils;
+
+type
+
+  TXwLetter = class(TInterfacedObject, IXwLetter)
+    strict private type
+      TXwLetterMatchType = (lmtOriginal, lmtMatched);
+      TXwLetterMatches = array [TXwLetterMatchType] of Char;
+    strict private
+      FLetter: TXwLetterMatches;
+      FOnMatchProc: TProc;
+      FUsedDirections: TXwWordDirections;
+      FLetterPositions: array [TXwWordDirection] of TXwLetterPosition;
+    public
+      {trzeba przerobić na IsFirst[TXwWordDirection]}
+      function GetFirst(const ADirection: TXwWordDirection): TXwLetterPosition;
+      function GetLast(const ADirection: TXwWordDirection): TXwLetterPosition;
+
+      constructor Create(const ALetter: Char; const AOnMatch: TProc = nil);
+
+      procedure Match(const ALetter: Char);
+
+      function UsedDirections: TXwWordDirections;
+      procedure AddDirection(const ADirection: TXwWordDirection; const APosition: TXwLetterPosition);
+      function CanAnchor(out ADirection: TXwWordDirection): Boolean;
+
+      function IsGuessed: Boolean;
+      function GetOriginal: Char;
+      function GetMatched: Char;
+
+      procedure Rebuild;
+      procedure Reset;
+  end;
+
+implementation
+
+const
+  XW_ALL_DIRECTIONS = [wdHorizontal, wdVertical];
+
+{ TXwLetter }
+
+function TXwLetter.CanAnchor(out ADirection: TXwWordDirection): Boolean;
+begin
+  Result := (FUsedDirections <> []) and (FUsedDirections <> XW_ALL_DIRECTIONS);
+  if Result then
+    if wdHorizontal in FUsedDirections then
+      ADirection := wdVertical
+    else
+      ADirection := wdHorizontal;
+end;
+
+procedure TXwLetter.AddDirection(const ADirection: TXwWordDirection; const APosition: TXwLetterPosition);
+begin
+  FLetterPositions[ADirection] := APosition;
+  FUsedDirections := FUsedDirections + [ADirection];
+end;
+
+constructor TXwLetter.Create(const ALetter: Char; const AOnMatch: TProc);
+begin
+  FLetter[lmtOriginal] := ALetter;
+  FLetter[lmtMatched] := #0;
+
+  FOnMatchProc := AOnMatch;
+end;
+
+function TXwLetter.GetFirst(const ADirection: TXwWordDirection): TXwLetterPosition;
+begin
+  Result := FLetterPositions[ADirection];
+end;
+
+function TXwLetter.GetLast(const ADirection: TXwWordDirection): TXwLetterPosition;
+begin
+  Result := FLetterPositions[ADirection];
+end;
+
+function TXwLetter.GetMatched: Char;
+begin
+  Result := FLetter[lmtMatched];
+end;
+
+function TXwLetter.GetOriginal: Char;
+begin
+  Result := FLetter[lmtOriginal];
+end;
+
+function TXwLetter.IsGuessed: Boolean;
+begin
+  Result := FLetter[lmtMatched] = FLetter[lmtOriginal];
+end;
+
+procedure TXwLetter.Match(const ALetter: Char);
+begin
+  FLetter[lmtMatched] := ALetter;
+  if Assigned(FOnMatchProc) then FOnMatchProc();
+end;
+
+procedure TXwLetter.Rebuild;
+begin
+  FUsedDirections := [];
+  FLetterPositions[wdHorizontal] := lpNone;
+  FLetterPositions[wdVertical] := lpNone;
+  Reset;
+end;
+
+procedure TXwLetter.Reset;
+begin
+  FLetter[lmtMatched] := #0;
+end;
+
+function TXwLetter.UsedDirections: TXwWordDirections;
+begin
+  Result := FUsedDirections;
+end;
+
+end.
+
+
+==============================================================================
+=== src\Xw.Word.pas
+==============================================================================
+
+unit Xw.Word;
+
+interface
+
+uses
+  Xw.Contracts;
+
+type
+  TXwWord = class(TInterfacedObject, IXwWord)
+
+    strict private type
+
+      TXwWordLetters = TArray<IXwLetter>;
+
+    strict private
+      FLength: Integer;
+
+      FDescription: string;
+      FWord: string;
+
+      FLetters: TXwWordLetters;
+
+      FCrossed: TXwWordLetters;
+
+      FGuessed: Boolean;
+      FCheck: Boolean;
+    public
+      constructor Create(const AWord, ADescription: string);
+
+      function IsGuessed: Boolean;
+      procedure CrossAt(const APosition: Integer; const ALetter: IXwLetter);
+
+      function GetDescription: string;
+      function GetWord: string;
+      function GetLength: Integer;
+      function GetLetter(const APosition: Integer): IXwLetter; inline;
+
+      procedure Rebuild;
+      procedure Reset;
+  end;
+
+  TXwWordFactory = class(TInterfacedObject, IXwWordFactory)
+    private
+      FLang: IXwLang;
+    public
+      constructor Create(const ALang: IXwLang);
+      function CreateWord(const AWord, ADescription: string): IXwWord;
+  end;
+
+implementation
+
+uses
+  Xw.Letter;
+
+{ TXwWord }
+
+constructor TXwWord.Create(const AWord, ADescription: string);
+var
+  I: Integer;
+begin
+  FWord := AWord;
+  FDescription := ADescription;
+
+  FLength := Length(FWord);
+
+  FGuessed := False;
+  FCheck := False;
+
+  SetLength(FLetters, FLength);
+  SetLength(FCrossed, FLength);
+
+  for I := 0 to FLength - 1 do begin
+    FLetters[I] := TXwLetter.Create(FWord[I+1], procedure begin FCheck := True end);
+  end;
+end;
+
+procedure TXwWord.CrossAt(const APosition: Integer; const ALetter: IXwLetter);
+var
+  LLeft, LRight: Char;
+begin
+  if (APosition < 1) or (APosition > FLength) then
+    raise EXwError.CreateFmt('TXwWord.CrossAt: Out of bounds [1..%d]', [FLength]);
+
+  LLeft := GetLetter(APosition).Original;
+  LRight := ALetter.Original;
+  if LLeft <> LRight then
+    raise EXwError.CreateFmt('TXwWord.CrossAt: Cannot cross with different letters: %s x %s', [LLeft, LRight]);
+
+  // zapisuje podmienianą literke
+  FCrossed[APosition-1] := GetLetter(APosition);
+  FLetters[APosition-1] := ALetter;
+end;
+
+function TXwWord.GetDescription: string;
+begin
+  Result := FDescription;
+end;
+
+function TXwWord.GetLength: Integer;
+begin
+  Result := FLength;
+end;
+
+function TXwWord.GetLetter(const APosition: Integer): IXwLetter;
+begin
+  if (APosition < 1) or (APosition > FLength) then
+    raise EXwError.CreateFmt('TXwWord.GetLetter: Out of bounds [1..%d]', [FLength]);
+  Result := FLetters[APosition - 1];
+end;
+
+function TXwWord.GetWord: string;
+begin
+  Result := FWord;
+end;
+
+function TXwWord.IsGuessed: Boolean;
+var
+  I: Integer;
+begin
+  if not FCheck then Exit(FGuessed);
+  FCheck := False;
+
+  Result := False;
+  FGuessed := False;
+
+  for I := 0 to FLength - 1 do begin
+    if not FLetters[I].IsGuessed then Exit;
+  end;
+
+  FGuessed := True;
+  Result := FGuessed;
+end;
+
+procedure TXwWord.Rebuild;
+var
+  I: Integer;
+begin
+  FGuessed := False;
+  FCheck := False;
+
+  for I := 0 to FLength -1 do begin
+    if FCrossed[I] <> nil then
+      FLetters[I] := FCrossed[I];
+    FLetters[I].Rebuild;
+  end;
+end;
+
+procedure TXwWord.Reset;
+var
+  I: Integer;
+begin
+  FGuessed := False;
+  FCheck := False;
+
+  for I := 0 to FLength - 1 do
+    FLetters[I].Reset;
+end;
+
+{ TXwWordFactory }
+
+constructor TXwWordFactory.Create(const ALang: IXwLang);
+begin
+  FLang := ALang;
+end;
+
+function TXwWordFactory.CreateWord(const AWord, ADescription: string): IXwWord;
+var
+  Normalized, ErrorMsg: string;
+begin
+  Normalized := FLang.Normalize(AWord);
+  if not FLang.IsValid(Normalized, ErrorMsg) then
+    raise EXwError.Create(ErrorMsg);
+  Result := TXwWord.Create(Normalized, ADescription);
+end;
+
+end.
+
+
