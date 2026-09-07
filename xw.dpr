@@ -14,7 +14,12 @@ uses
   Xw.Metrics in 'src\Xw.Metrics.pas',
   Xw.Tests in 'src\Xw.Tests.pas',
   Xw.Word in 'src\Xw.Word.pas',
-  Xw.Generator in 'src\Xw.Generator.pas';
+  Xw.Generator in 'src\Xw.Generator.pas',
+  Sjp.Client in 'src\Sjp.Client.pas',
+  Sjp.Contracts in 'src\Sjp.Contracts.pas',
+  Sjp.Http in 'src\Sjp.Http.pas',
+  Sjp.Parser in 'src\Sjp.Parser.pas',
+  Sjp.Url in 'src\Sjp.Url.pas';
 
 begin
   try
