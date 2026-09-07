@@ -8,8 +8,7 @@ uses
   System.Generics.Collections,
   System.SysUtils,
   Xw.Anchors,
-  Xw.Contracts,
-  Xw.Grid;
+  Xw.Contracts;
 
 type
 
@@ -40,7 +39,10 @@ type
       FStampGen: Integer;
 
       FWords: TList<TXwPlacedWord>;
-      FMatrix: TXwGrid<IXwLetter>;
+      FLetters: TArray<IXwLetter>;
+      FHSize: Integer;
+      FVSize: Integer;
+      FFlatSize: Integer;
       FAnchors: TXwAnchorIndex;
       FTouched: TList<Integer>;
 
@@ -71,6 +73,8 @@ type
       function GetOriginH: Integer;
       function GetOriginV: Integer;
 
+      function InBounds(const AH, AV: Integer): Boolean; inline;
+      function IndexOf(const AH, AV: Integer): Integer; inline;
       procedure ExpandBounds(const AH, AV: Integer); inline;
       function BoundsAfter(const AWord: IXwWord;
         const APlacement: TXwWordPlacement): TXwBounds;
@@ -158,23 +162,29 @@ var
 begin
   inherited Create;
 
-  FMatrix := TXwGrid<IXwLetter>.Create(AHSize, AVSize);
+  if (AHSize <= 0) or (AVSize <= 0) then
+    raise EXwError.Create('TXwBoard: rozmiar musi byc dodatni.');
+
+  FHSize := AHSize;
+  FVSize := AVSize;
+  FFlatSize := FHSize * FVSize;
+  SetLength(FLetters, FFlatSize);
 
   FWords := TList<TXwPlacedWord>.Create;
   FWordCross := TList<Integer>.Create;
 
-  SetLength(FCellWord, FMatrix.FlatSize);
+  SetLength(FCellWord, FFlatSize);
   for I := 0 to High(FCellWord) do
     FCellWord[I] := -1;
 
-  SetLength(FChars, FMatrix.FlatSize);
-  SetLength(FDirs, FMatrix.FlatSize);
-  SetLength(FNumbers, FMatrix.FlatSize);
-  SetLength(FSolutionOrder, FMatrix.FlatSize);
+  SetLength(FChars, FFlatSize);
+  SetLength(FDirs, FFlatSize);
+  SetLength(FNumbers, FFlatSize);
+  SetLength(FSolutionOrder, FFlatSize);
   FNumbersDirty := True;
   FLang := ALang;
   FSolution := '';
-  SetLength(FStamp, FMatrix.FlatSize * 2);
+  SetLength(FStamp, FFlatSize * 2);
   FStampGen := 0;
 
   FTouched := TList<Integer>.Create;
@@ -204,7 +214,6 @@ end;
 destructor TXwBoard.Destroy;
 begin
   Clear;
-  FMatrix.Free;
   FWords.Free;
   FWordCross.Free;
   FAnchors.Free;
@@ -212,28 +221,38 @@ begin
   inherited;
 end;
 
+function TXwBoard.InBounds(const AH, AV: Integer): Boolean;
+begin
+  Result := (Cardinal(AH) < Cardinal(FHSize)) and (Cardinal(AV) < Cardinal(FVSize));
+end;
+
+function TXwBoard.IndexOf(const AH, AV: Integer): Integer;
+begin
+  Result := AV * FHSize + AH;
+end;
+
 function TXwBoard.LetterAt(const AH, AV: Integer): IXwLetter;
 begin
-  if not FMatrix.InBounds(AH, AV) then
+  if not InBounds(AH, AV) then
     Exit(nil);
-  Result := FMatrix[AH, AV];
+  Result := FLetters[AV * FHSize + AH];
 end;
 
 function TXwBoard.IsOccupied(const AH, AV: Integer): Boolean;
 begin
-  Result := FMatrix.InBounds(AH, AV) and (FChars[AV * FMatrix.HSize + AH] <> #0);
+  Result := InBounds(AH, AV) and (FChars[AV * FHSize + AH] <> #0);
 end;
 
 function TXwBoard.CellChar(const AH, AV: Integer): Char;
 begin
-  if not FMatrix.InBounds(AH, AV) then Exit(#0);
-  Result := FChars[AV * FMatrix.HSize + AH];
+  if not InBounds(AH, AV) then Exit(#0);
+  Result := FChars[AV * FHSize + AH];
 end;
 
 function TXwBoard.CellState(const AH, AV: Integer): Byte;
 begin
-  if not FMatrix.InBounds(AH, AV) then Exit(0);
-  Result := FDirs[AV * FMatrix.HSize + AH];
+  if not InBounds(AH, AV) then Exit(0);
+  Result := FDirs[AV * FHSize + AH];
 end;
 
 procedure TXwBoard.EnsureNumbers;
@@ -250,7 +269,7 @@ begin
   for I := 0 to High(FWordNumber) do
     FWordNumber[I] := 0;
 
-  LHSize := FMatrix.HSize;
+  LHSize := FHSize;
   LNext := 1;
 
   for V := FBounds.MinV to FBounds.MaxV do
@@ -266,7 +285,7 @@ begin
       if not LStart then
         LStart :=
           ((V = 0) or (FChars[LIdx - LHSize] = #0))
-          and (V + 1 < FMatrix.VSize) and (FChars[LIdx + LHSize] <> #0);
+          and (V + 1 < FVSize) and (FChars[LIdx + LHSize] <> #0);
 
       if LStart then
       begin
@@ -298,8 +317,8 @@ end;
 
 function TXwBoard.SolutionAt(const AH, AV: Integer): Integer;
 begin
-  if not FMatrix.InBounds(AH, AV) then Exit(0);
-  Result := FSolutionOrder[AV * FMatrix.HSize + AH];
+  if not InBounds(AH, AV) then Exit(0);
+  Result := FSolutionOrder[AV * FHSize + AH];
 end;
 
 function TXwBoard.SolutionAugment(const APos: Integer): Boolean;
@@ -391,9 +410,9 @@ end;
 
 function TXwBoard.NumberAt(const AH, AV: Integer): Integer;
 begin
-  if not FMatrix.InBounds(AH, AV) then Exit(0);
+  if not InBounds(AH, AV) then Exit(0);
   EnsureNumbers;
-  Result := FNumbers[AV * FMatrix.HSize + AH];
+  Result := FNumbers[AV * FHSize + AH];
 end;
 
 function TXwBoard.WordNumber(const AIndex: Integer): Integer;
@@ -440,12 +459,12 @@ end;
 
 function TXwBoard.GetHSize: Integer;
 begin
-  Result := FMatrix.HSize;
+  Result := FHSize;
 end;
 
 function TXwBoard.GetVSize: Integer;
 begin
-  Result := FMatrix.VSize;
+  Result := FVSize;
 end;
 
 function TXwBoard.GetLang: IXwLang;
@@ -489,33 +508,33 @@ begin
   if LLen < 2 then Exit(False);
 
   if (APlacement.H < 0) or (APlacement.V < 0)
-    or (APlacement.H >= FMatrix.HSize) or (APlacement.V >= FMatrix.VSize) then
+    or (APlacement.H >= FHSize) or (APlacement.V >= FVSize) then
     Exit(False);
 
   if APlacement.Direction = wdHorizontal then
   begin
-    if APlacement.H + LLen > FMatrix.HSize then Exit(False);
+    if APlacement.H + LLen > FHSize then Exit(False);
     LStep := 1;
-    LPerp := FMatrix.HSize;
+    LPerp := FHSize;
     LMask := XW_DIR_H;
     LHasBefore := APlacement.H > 0;
-    LHasAfter  := APlacement.H + LLen < FMatrix.HSize;
+    LHasAfter  := APlacement.H + LLen < FHSize;
     LHasPerpLo := APlacement.V > 0;
-    LHasPerpHi := APlacement.V < FMatrix.VSize - 1;
+    LHasPerpHi := APlacement.V < FVSize - 1;
   end
   else
   begin
-    if APlacement.V + LLen > FMatrix.VSize then Exit(False);
-    LStep := FMatrix.HSize;
+    if APlacement.V + LLen > FVSize then Exit(False);
+    LStep := FHSize;
     LPerp := 1;
     LMask := XW_DIR_V;
     LHasBefore := APlacement.V > 0;
-    LHasAfter  := APlacement.V + LLen < FMatrix.VSize;
+    LHasAfter  := APlacement.V + LLen < FVSize;
     LHasPerpLo := APlacement.H > 0;
-    LHasPerpHi := APlacement.H < FMatrix.HSize - 1;
+    LHasPerpHi := APlacement.H < FHSize - 1;
   end;
 
-  LStart := APlacement.V * FMatrix.HSize + APlacement.H;
+  LStart := APlacement.V * FHSize + APlacement.H;
   APlacement.StartIndex := LStart;
 
   if LHasBefore and (FChars[LStart - LStep] <> #0) then Exit(False);
@@ -585,7 +604,7 @@ begin
 
   for LIdx in FTouched do
   begin
-    FMatrix.Flat[LIdx] := nil;
+    FLetters[LIdx] := nil;
     FCellWord[LIdx] := -1;
     FChars[LIdx] := #0;
     FDirs[LIdx] := 0;
@@ -618,12 +637,12 @@ var
 begin
   case APlacement.Direction of
     wdHorizontal: begin LStep := 1;               LMask := XW_DIR_H; end;
-    wdVertical:   begin LStep := FMatrix.HSize;   LMask := XW_DIR_V; end;
+    wdVertical:   begin LStep := FHSize;   LMask := XW_DIR_V; end;
     else raise EXwError.Create('TXwBoard.PlaceWord: Unknown direction.');
   end;
 
   LNewIndex := FWords.Count;
-  LIdx := FMatrix.IndexOf(APlacement.H, APlacement.V);
+  LIdx := IndexOf(APlacement.H, APlacement.V);
 
   for I := 1 to AWord.Length do
   begin
@@ -634,10 +653,9 @@ begin
     else
       LPosition := lpMiddle;
 
-    LCell := FMatrix.Flat[LIdx];
-
-    if LCell <> nil then
+    if FChars[LIdx] <> #0 then
     begin
+      LCell := FLetters[LIdx];
       AWord.CrossAt(I, LCell);
       LCell.AddDirection(APlacement.Direction, LPosition);
       FDirs[LIdx] := FDirs[LIdx] or LMask;
@@ -652,7 +670,7 @@ begin
     else
     begin
       LLetter := AWord[I];
-      FMatrix.Flat[LIdx] := LLetter;
+      FLetters[LIdx] := LLetter;
       FChars[LIdx] := LLetter.Original;
       FDirs[LIdx] := LMask;
       FAnchors.Add(LLetter.Original, LIdx);
@@ -711,29 +729,29 @@ function TXwBoard.SeedPlacement(const AWord: IXwWord; const ADirection: TXwWordD
 begin
   APlacement := Default(TXwWordPlacement);
 
-  if (AWord.Length > FMatrix.HSize) and (AWord.Length > FMatrix.VSize) then
+  if (AWord.Length > FHSize) and (AWord.Length > FVSize) then
     Exit(False);
 
   APlacement.Direction := ADirection;
-  if (APlacement.Direction = wdHorizontal) and (AWord.Length > FMatrix.HSize) then
+  if (APlacement.Direction = wdHorizontal) and (AWord.Length > FHSize) then
     APlacement.Direction := wdVertical
-  else if (APlacement.Direction = wdVertical) and (AWord.Length > FMatrix.VSize) then
+  else if (APlacement.Direction = wdVertical) and (AWord.Length > FVSize) then
     APlacement.Direction := wdHorizontal;
 
   case APlacement.Direction of
     wdHorizontal:
       begin
-        APlacement.H := (FMatrix.HSize - AWord.Length) div 2;
-        APlacement.V := FMatrix.VSize div 2;
+        APlacement.H := (FHSize - AWord.Length) div 2;
+        APlacement.V := FVSize div 2;
       end;
     wdVertical:
       begin
-        APlacement.H := FMatrix.HSize div 2;
-        APlacement.V := (FMatrix.VSize - AWord.Length) div 2;
+        APlacement.H := FHSize div 2;
+        APlacement.V := (FVSize - AWord.Length) div 2;
       end;
   end;
 
-  APlacement.StartIndex := FMatrix.IndexOf(APlacement.H, APlacement.V);
+  APlacement.StartIndex := IndexOf(APlacement.H, APlacement.V);
   APlacement.Crossings  := 0;
   APlacement.Score      := 0;
   APlacement.Rescue     := 0;
@@ -812,8 +830,8 @@ begin
       else
         LPlacement.Direction := wdHorizontal;
 
-      LPlacement.V := LGrid div FMatrix.HSize;
-      LPlacement.H := LGrid - LPlacement.V * FMatrix.HSize;
+      LPlacement.V := LGrid div FHSize;
+      LPlacement.H := LGrid - LPlacement.V * FHSize;
 
       if LPlacement.Direction = wdHorizontal then
         Dec(LPlacement.H, LPos - 1)

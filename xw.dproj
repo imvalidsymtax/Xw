@@ -92,7 +92,6 @@
         <DCCReference Include="src\Xw.Board.pas"/>
         <DCCReference Include="src\Xw.Contracts.pas"/>
         <DCCReference Include="src\Xw.Corpus.pas"/>
-        <DCCReference Include="src\Xw.Grid.pas"/>
         <DCCReference Include="src\Xw.Langs.pas"/>
         <DCCReference Include="src\Xw.Letter.pas"/>
         <DCCReference Include="src\Xw.Metrics.pas"/>

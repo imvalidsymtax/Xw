@@ -9,7 +9,6 @@ uses
   Xw.Board in 'src\Xw.Board.pas',
   Xw.Contracts in 'src\Xw.Contracts.pas',
   Xw.Corpus in 'src\Xw.Corpus.pas',
-  Xw.Grid in 'src\Xw.Grid.pas',
   Xw.Langs in 'src\Xw.Langs.pas',
   Xw.Letter in 'src\Xw.Letter.pas',
   Xw.Metrics in 'src\Xw.Metrics.pas',
@@ -225,13 +224,13 @@ end;
 
 begin
   try
-    {XwRunUnitTests;
+    XwRunUnitTests;
     XwRunBenchmark(120);
-    XwPrintSample(45);}
+    XwPrintSample(45);
 
     //Test;
 
-    XwPlayInConsole;
+    //XwPlayInConsole;
   except
     on E: Exception do
       Writeln(E.ClassName, ': ', E.Message);
