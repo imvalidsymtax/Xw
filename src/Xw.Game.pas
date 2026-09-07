@@ -2,32 +2,43 @@ unit Xw.Game;
 
 interface
 
-procedure XwPlayInConsole;
+uses
+  Xw.Contracts;
+
+type
+  TXwGetEntry = reference to function(out AEntry: TXwEntry): Boolean;
+
+procedure XwPlayInConsole(const AOnGetEntry: TXwGetEntry = nil);
 
 implementation
 
 uses
   System.SysUtils,
+  System.StrUtils,
   System.Character,
-  Xw.Contracts,
   Xw.Langs,
   Xw.Corpus,
   Xw.Generator,
   Xw.Present;
 
-procedure XwPlayInConsole;
+procedure XwPlayInConsole(const AOnGetEntry: TXwGetEntry);
 const
+  CSOLUTIONPOOL  = 60;
+  CCLUEWIDTH     = 64;
+  CANIMMS        = 12;
   CSOLUTIONTRIES = 400;
+  CFETCHFAILS    = 20;
 var
   LLang: IXwLang;
   LGen: TXwGenerator;
   LOpt: TXwGenOptions;
   LRes: TXwGenResult;
-  LPool: TXwEntries;
+  LWords: TXwEntries;
+  LSolutions: TXwEntries;
   LPrint: TXwPrintBoard;
   LPlay: IXwPlayBoard;
   LWordCount, LHints, LTries: Integer;
-  LLine: string;
+  LLine, LStatus: string;
   LRunning: Boolean;
 
   function AskCount: Integer;
@@ -36,22 +47,114 @@ var
     LValue: Integer;
   begin
     Result := 30;
-    Write(Format('Ile slow (5..%d, ENTER = 30)? ', [XwCorpusCount]));
+    if Assigned(AOnGetEntry) then
+      Write('Ile slow (5..200, ENTER = 30)? ')
+    else
+      Write(Format('Ile slow (5..%d, ENTER = 30)? ', [XwCorpusCount]));
+
     Readln(LText);
     if LText.Trim = '' then Exit;
     if not TryStrToInt(LText.Trim, LValue) then Exit;
+
     if LValue < 5 then LValue := 5;
-    if LValue > XwCorpusCount then LValue := XwCorpusCount;
+    if Assigned(AOnGetEntry) then
+    begin
+      if LValue > 200 then LValue := 200;
+    end
+    else
+      if LValue > XwCorpusCount then LValue := XwCorpusCount;
+
     Result := LValue;
+  end;
+
+  function Fetch(const ACount: Integer): TXwEntries;
+  var
+    LEntry: TXwEntry;
+    LTaken, LFails: Integer;
+  begin
+    SetLength(Result, ACount);
+    LTaken := 0;
+    LFails := 0;
+
+    while (LTaken < ACount) and (LFails < CFETCHFAILS) do
+    begin
+      try
+        if AOnGetEntry(LEntry) then
+        begin
+          Result[LTaken] := LEntry;
+          Inc(LTaken);
+          if LTaken mod 10 = 0 then
+            Write('.');
+          Continue;
+        end;
+      except
+        on E: Exception do
+          Writeln(Format(' blad pobierania: %s', [E.Message]));
+      end;
+      Inc(LFails);
+    end;
+
+    SetLength(Result, LTaken);
+  end;
+
+  procedure BuildPools;
+  var
+    LPool: TXwEntries;
+    K: Integer;
+  begin
+    if not Assigned(AOnGetEntry) then
+    begin
+      LPool := XwCorpusEntries(XwCorpusCount);
+      if LWordCount > Length(LPool) then
+        LWordCount := Length(LPool);
+    end
+    else
+    begin
+      Write(Format('pobieram %d fraz ', [LWordCount + CSOLUTIONPOOL]));
+      LPool := Fetch(LWordCount + CSOLUTIONPOOL);
+      Writeln;
+      Writeln(Format('  pobrano %d', [Length(LPool)]));
+      if LWordCount > Length(LPool) then
+        LWordCount := Length(LPool);
+    end;
+
+    SetLength(LWords, LWordCount);
+    for K := 0 to LWordCount - 1 do
+      LWords[K] := LPool[K];
+
+    if Length(LPool) > LWordCount then
+    begin
+      SetLength(LSolutions, Length(LPool) - LWordCount);
+      for K := 0 to High(LSolutions) do
+        LSolutions[K] := LPool[LWordCount + K];
+    end
+    else
+      LSolutions := LPool;
+  end;
+
+  procedure ReportIntake;
+  var
+    K: Integer;
+  begin
+    if Length(LRes.Rejected) = 0 then Exit;
+
+    Writeln(Format('  odrzucono %d fraz:', [Length(LRes.Rejected)]));
+    for K := 0 to High(LRes.Rejected) do
+      Writeln(Format('    "%s" -> %s',
+        [LRes.Rejected[K].Phrase, LRes.Rejected[K].Reason]));
   end;
 
   function DrawSolution: Boolean;
   var
     K: Integer;
   begin
+    if Length(LSolutions) = 0 then Exit(False);
+
     for K := 1 to CSOLUTIONTRIES do
-      if LRes.Board.TrySetSolution(LPool[Random(Length(LPool))].Phrase) then
+      if LRes.Board.TrySetSolution(
+        LSolutions[Random(Length(LSolutions))].Phrase) then
         Exit(True);
+
     Result := False;
   end;
 
@@ -89,8 +192,11 @@ var
     Writeln;
     XwWriteLines(XwRenderPlayNumbered(LPlay));
     Writeln;
-    Writeln(Format('  haslo: %s        podpowiedzi: %d',
-      [SolutionSoFar, LPlay.HintsLeft]));
+    if LPrint.Solution = '' then
+      Writeln(Format('  podpowiedzi: %d', [LPlay.HintsLeft]))
+    else
+      Writeln(Format('  haslo: %s        podpowiedzi: %d',
+        [SolutionSoFar, LPlay.HintsLeft]));
   end;
 
   procedure ShowClues;
@@ -98,7 +204,7 @@ var
     LDir: TXwWordDirection;
     LEntry: IXwPlayEntry;
     K: Integer;
-    LMark: string;
+    LMark, LText: string;
   begin
     Writeln;
     for LDir := wdHorizontal to wdVertical do
@@ -118,9 +224,16 @@ var
         else
           LMark := ' ';
 
-        Writeln(Format(' %s %d. %s (%d liter)',
+        LText := LPrint.Entries[K].Description.Trim;
+        if LText = '' then
+          LText := '(bez definicji)'
+        else if Length(LText) > CCLUEWIDTH then
+          LText := Copy(LText, 1, CCLUEWIDTH - 3) + '...';
+
+        Writeln(Format(' %s %2d %s  %-*s  (%d)',
           [LMark, LPrint.Entries[K].Number,
-           LPrint.Entries[K].Description, LPrint.Entries[K].Length]));
+           IfThen(LDir = wdHorizontal, 'poz', 'pio'),
+           CCLUEWIDTH, LText, LPrint.Entries[K].Length]));
       end;
     end;
   end;
@@ -147,18 +260,23 @@ var
     Writeln;
     Writeln('rozwiazanie:');
     Writeln;
-    XwWriteLines(XwRenderBoard(LPrint, rmLetters));
-    Writeln;
-    Writeln('haslo: ' + LPrint.Solution);
+    XwWriteLinesAnimated(XwRenderBoard(LPrint, rmLetters), CANIMMS, 3);
+    if LPrint.Solution <> '' then
+    begin
+      Writeln;
+      Writeln('haslo: ' + LPrint.Solution);
+    end;
   end;
 
-  procedure ApplyEntry(const ACommand: string);
+  function ApplyEntry(const ACommand: string): string;
   var
     LEntry: IXwPlayEntry;
     LDirection: TXwWordDirection;
     LNumber, LAt, K: Integer;
-    LDigits, LAnswer: string;
+    LDigits, LAnswer, LName: string;
+    LBefore: TArray<Char>;
   begin
+    Result := '';
     LAt := 1;
     LDigits := '';
     while (LAt <= Length(ACommand)) and ACommand[LAt].IsDigit do
@@ -168,26 +286,22 @@ var
     end;
 
     if (LDigits = '') or (LAt > Length(ACommand)) then
-    begin
-      Writeln('  nie rozumiem, wpisz np.  3p KOT');
-      Exit;
-    end;
+      Exit('nie rozumiem, wpisz np.  3p KOT');
 
     case ACommand[LAt].ToLower of
       'p': LDirection := wdHorizontal;
       'v': LDirection := wdVertical;
     else
-      Writeln('  kierunek to p (poziomo) albo v (pionowo)');
-      Exit;
+      Exit('kierunek to p (poziomo) albo v (pionowo)');
     end;
 
     LNumber := StrToInt(LDigits);
     LEntry := FindEntry(LNumber, LDirection);
     if LEntry = nil then
-    begin
-      Writeln(Format('  nie ma hasla %d%s', [LNumber, ACommand[LAt]]));
-      Exit;
-    end;
+      Exit(Format('nie ma hasla %d%s', [LNumber, ACommand[LAt]]));
+
+    LName := Format('%d %s', [LNumber,
+      IfThen(LDirection = wdHorizontal, 'poziomo', 'pionowo')]);
 
     LAnswer := LLang.Normalize(Copy(ACommand, LAt + 1, MaxInt));
 
@@ -195,24 +309,31 @@ var
     begin
       for K := 0 to LEntry.Length - 1 do
         LEntry[K].Guess := #0;
-      Writeln('  wyczyszczone');
-      Exit;
+      Exit(Format('%s wyczyszczone', [LName]));
     end;
 
     if Length(LAnswer) <> LEntry.Length then
-    begin
-      Writeln(Format('  to haslo ma %d liter, podales %d',
-        [LEntry.Length, Length(LAnswer)]));
-      Exit;
-    end;
+      Exit(Format('%s ma %d liter, a "%s" ma %d - nie wpisano',
+        [LName, LEntry.Length, LAnswer, Length(LAnswer)]));
+
+    SetLength(LBefore, LEntry.Length);
+    for K := 0 to LEntry.Length - 1 do
+      LBefore[K] := LEntry[K].Guess;
 
     for K := 0 to LEntry.Length - 1 do
       LEntry[K].Guess := LAnswer[K + 1];
 
     if LEntry.IsSolved then
-      Writeln('  trafione')
-    else
-      Writeln('  wpisane');
+    begin
+      Result := Format('%s: TRAFIONE', [LName]);
+      Exit;
+    end;
+
+    for K := 0 to LEntry.Length - 1 do
+      LEntry[K].Guess := LBefore[K];
+
+    Result := Format('%s: "%s" nie pasuje - plansza bez zmian',
+      [LName, LAnswer]);
   end;
 
 begin
@@ -220,19 +341,28 @@ begin
 
   LLang := TXwLangPL.Create(True);
   LWordCount := AskCount;
-  LPool := XwCorpusEntries(XwCorpusCount);
 
   Writeln;
+  BuildPools;
+
+  if Length(LWords) < 2 then
+  begin
+    Writeln('Za malo fraz zeby cokolwiek ulozyc.');
+    Exit;
+  end;
+
   Writeln('generuje...');
 
   LGen := TXwGenerator.Create(LLang);
   try
     LOpt := TXwGenOptions.Standard;
     LOpt.Seed := UInt64(Random(MaxInt)) + 1;
-    LRes := LGen.Generate(XwCorpusEntries(LWordCount), LOpt);
+    LRes := LGen.Generate(LWords, LOpt);
   finally
     LGen.Free;
   end;
+
+  ReportIntake;
 
   if LRes.Accepted < 2 then
   begin
@@ -258,9 +388,12 @@ begin
   Writeln;
   Writeln(Format('Plansza %d x %d, %d hasel, haslo na %d liter.',
     [LPrint.Width, LPrint.Height, LPlay.EntryCount, Length(LPrint.Solution)]));
+  Writeln;
+  XwWriteLinesAnimated(XwRenderPlayNumbered(LPlay), CANIMMS);
 
   Refresh;
 
+  LStatus := '';
   LRunning := True;
   while LRunning do
   begin
@@ -276,22 +409,30 @@ begin
     else if LLine = '?' then
     begin
       if LPlay.TryHint then
-        Writeln('  podpowiedz naniesiona')
+        LStatus := 'podpowiedz naniesiona'
       else
-        Writeln('  brak podpowiedzi albo nie ma czego podpowiedziec');
+        LStatus := 'brak podpowiedzi albo nie ma czego podpowiedziec';
       Refresh;
     end
     else
     begin
-      ApplyEntry(LLine);
+      LStatus := ApplyEntry(LLine);
       Refresh;
+    end;
+
+    if LStatus <> '' then
+    begin
+      Writeln;
+      Writeln('>>> ' + LStatus);
+      LStatus := '';
     end;
 
     if LRunning and LPlay.IsSolved then
     begin
       Writeln;
       Writeln('Cala krzyzowka rozwiazana.');
-      Writeln('Haslo: ' + SolutionSoFar);
+      if LPrint.Solution <> '' then
+        Writeln('Haslo: ' + SolutionSoFar);
       LRunning := False;
     end;
   end;

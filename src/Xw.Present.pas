@@ -114,11 +114,14 @@ function XwRenderClues(const APrint: TXwPrintBoard): TArray<string>;
 function XwRenderPlay(const APlay: IXwPlayBoard): TArray<string>;
 function XwRenderPlayNumbered(const APlay: IXwPlayBoard): TArray<string>;
 procedure XwWriteLines(const ALines: TArray<string>);
+procedure XwWriteLinesAnimated(const ALines: TArray<string>;
+  const AStepDelayMs: Integer = 12; const AStepWidth: Integer = 4);
 
 implementation
 
 uses
   System.SysUtils,
+  System.Classes,
   System.Character,
   System.Generics.Collections,
   System.Generics.Defaults;
@@ -760,6 +763,39 @@ var
 begin
   for I := 0 to High(ALines) do
     Writeln(ALines[I]);
+end;
+
+procedure XwWriteLinesAnimated(const ALines: TArray<string>;
+  const AStepDelayMs: Integer; const AStepWidth: Integer);
+var
+  I, LAt, LWidth: Integer;
+  LChunk: string;
+begin
+  if (AStepDelayMs <= 0) or (AStepWidth <= 0) then
+  begin
+    XwWriteLines(ALines);
+    Exit;
+  end;
+
+  for I := 0 to High(ALines) do
+  begin
+    LAt := 1;
+    while LAt <= Length(ALines[I]) do
+    begin
+      LWidth := AStepWidth;
+      if LAt + LWidth - 1 > Length(ALines[I]) then
+        LWidth := Length(ALines[I]) - LAt + 1;
+
+      LChunk := Copy(ALines[I], LAt, LWidth);
+      Write(LChunk);
+
+      if LChunk.Trim <> '' then
+        TThread.Sleep(AStepDelayMs);
+
+      Inc(LAt, LWidth);
+    end;
+    Writeln;
+  end;
 end;
 
 end.

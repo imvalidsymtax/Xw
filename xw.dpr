@@ -5,6 +5,7 @@
 uses
   System.SysUtils,
   Winapi.Windows,
+  System.Generics.Defaults,
   Xw.Anchors in 'src\Xw.Anchors.pas',
   Xw.Board in 'src\Xw.Board.pas',
   Xw.Contracts in 'src\Xw.Contracts.pas',
@@ -222,12 +223,57 @@ begin
   PlayDemo;
 end;
 
+procedure PlayInConsoleSjp;
+var
+  LClient: ISjpClient;
+
+begin
+  LClient := TSjpClient.Create;
+
+  XwPlayInConsole(
+    function(out AEntry: TXwEntry): Boolean
+    var
+      LResponse: TSjpEntry;
+        I:Integer;
+    begin
+      LResponse := LClient.GetRandom;
+
+      if not LResponse.AllowedInGames then Exit(False);
+
+      AEntry.Phrase := LResponse.Term;
+
+      if Length(LResponse.Meanings) > 0 then
+      begin
+        AEntry.Description := LResponse.Meanings[0];
+        for I := 1 to High(LResponse.Meanings) do
+          if Length(LResponse.Meanings[I]) > Length(AEntry.Description) then
+            AEntry.Description := LResponse.Meanings[I];
+      end
+      else
+        AEntry.Description := '(brak definicji)';
+
+      Result := AEntry.Phrase.Trim <> '';
+    end);
+end;
+
+var
+  Pyt: string;
 begin
   try
+    repeat
+      PlayInConsoleSjp;
+
+      Write(#10#13'Spróbować jeszcze raz t/N? ');
+      ReadLn(Pyt);
+      Writeln;
+
+    until UpperCase(Pyt) <> 'T';
+
+    {
     XwRunUnitTests;
     XwRunBenchmark(120);
     XwPrintSample(45);
-
+     }
     //Test;
 
     //XwPlayInConsole;
