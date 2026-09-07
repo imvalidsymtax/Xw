@@ -17,10 +17,13 @@ type
       FOnMatchProc: TProc;
       FUsedDirections: TXwWordDirections;
       FPositions: array [TXwWordDirection] of TXwLetterPosition;
+      FHinted: Boolean;
     public
       constructor Create(const ALetter: Char; const AOnMatch: TProc = nil);
 
       procedure Match(const ALetter: Char);
+      procedure Reveal;
+      function IsHinted: Boolean;
 
       function GetPosition(const ADirection: TXwWordDirection): TXwLetterPosition;
       function GetIsFirst(const ADirection: TXwWordDirection): Boolean;
@@ -52,6 +55,7 @@ begin
   FUsedDirections := [];
   FPositions[wdHorizontal] := lpNone;
   FPositions[wdVertical] := lpNone;
+  FHinted := False;
   FOnMatchProc := AOnMatch;
 end;
 
@@ -109,7 +113,20 @@ end;
 procedure TXwLetter.Match(const ALetter: Char);
 begin
   FLetter[lmtMatched] := ALetter;
+  FHinted := False;
   if Assigned(FOnMatchProc) then FOnMatchProc();
+end;
+
+procedure TXwLetter.Reveal;
+begin
+  FLetter[lmtMatched] := FLetter[lmtOriginal];
+  FHinted := True;
+  if Assigned(FOnMatchProc) then FOnMatchProc();
+end;
+
+function TXwLetter.IsHinted: Boolean;
+begin
+  Result := FHinted;
 end;
 
 procedure TXwLetter.Rebuild;
@@ -123,6 +140,7 @@ end;
 procedure TXwLetter.Reset;
 begin
   FLetter[lmtMatched] := #0;
+  FHinted := False;
 end;
 
 function TXwLetter.UsedDirections: TXwWordDirections;

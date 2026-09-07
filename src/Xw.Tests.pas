@@ -26,6 +26,7 @@ uses
   Xw.Generator,
   Xw.Langs,
   Xw.Metrics,
+  Xw.Present,
   Xw.Word;
 
 var
@@ -291,6 +292,55 @@ begin
   Check(True, 'tablica cieni zgodna z siatka obiektow na calej planszy');
 end;
 
+procedure TestNumbering;
+var
+  LLang: IXwLang;
+  LFactory: IXwWordFactory;
+  LImpl: TXwBoard;
+  LBoard: IXwBoard;
+  LSeen: Integer;
+  H, V: Integer;
+begin
+  Writeln('TestNumbering');
+  LLang := TXwLangPL.Create(True);
+  LFactory := TXwWordFactory.Create(LLang);
+  LImpl := TXwBoard.Create(15, 15, LLang);
+  LBoard := LImpl;
+
+  LImpl.TryPlaceWord(LFactory.CreateWord('kot', 'a'));
+  LImpl.TryPlaceWord(LFactory.CreateWord('tor', 'b'));
+
+  CheckEq(1, LBoard.NumberAt(6, 7), 'KOT zaczyna sie w kratce numer 1');
+  CheckEq(0, LBoard.NumberAt(7, 7), 'srodek slowa nie dostaje numeru');
+  CheckEq(2, LBoard.NumberAt(8, 7), 'TOR zaczyna sie w kratce numer 2');
+  CheckEq(0, LBoard.NumberAt(8, 8), 'srodek pionu nie dostaje numeru');
+  CheckEq(0, LBoard.NumberAt(0, 0), 'pusta kratka nie ma numeru');
+
+  CheckEq(1, LBoard.WordNumber(0), 'pierwsze slowo ma numer swojej kratki');
+  CheckEq(2, LBoard.WordNumber(1), 'drugie slowo ma numer swojej kratki');
+
+  LImpl.TryPlaceWord(LFactory.CreateWord('kula', 'c'));
+
+  CheckEq(1, LBoard.NumberAt(6, 7), 'kratka wspolna dwoch hasel ma jeden numer');
+  CheckEq(1, LBoard.WordNumber(2), 'KULA dzieli numer z KOT');
+
+  LSeen := 0;
+  for V := 0 to LBoard.VSize - 1 do
+    for H := 0 to LBoard.HSize - 1 do
+      if LBoard.NumberAt(H, V) > 0 then
+      begin
+        Inc(LSeen);
+        if LBoard.NumberAt(H, V) <> LSeen then
+          Check(False, Format('numer %d poza porzadkiem czytania w (%d,%d)',
+            [LBoard.NumberAt(H, V), H, V]));
+      end;
+  Check(True, 'numery rosna w porzadku czytania');
+  CheckEq(2, LSeen, 'trzy hasla dziela dwie kratki startowe');
+
+  LBoard.Clear;
+  CheckEq(0, LBoard.NumberAt(6, 7), 'Clear zeruje numeracje');
+end;
+
 procedure TestPlacementMetrics;
 var
   LLang: IXwLang;
@@ -328,6 +378,335 @@ begin
   Check(LImpl.Revalidate(LWord, LP), 'OTOK pionowo od litery O jest legalne');
   CheckEq(1, Integer(LP.CrossMask), 'skrzyzowanie na pozycji pierwszej');
   CheckEq(3, LP.MaxRun, 'trzy litery bez podpowiedzi na koncu');
+end;
+
+procedure TestSolution;
+var
+  LLang: IXwLang;
+  LFactory: IXwWordFactory;
+  LImpl: TXwBoard;
+  LBoard: IXwBoard;
+begin
+  Writeln('TestSolution');
+  LLang := TXwLangPL.Create(True);
+  LFactory := TXwWordFactory.Create(LLang);
+  LImpl := TXwBoard.Create(15, 15, LLang);
+  LBoard := LImpl;
+
+  LImpl.TryPlaceWord(LFactory.CreateWord('kot', 'a'));
+  LImpl.TryPlaceWord(LFactory.CreateWord('tor', 'b'));
+  LImpl.TryPlaceWord(LFactory.CreateWord('kula', 'c'));
+
+  Check(LBoard.TrySetSolution('ou'), 'OU da sie ulozyc z dwoch roznych slow');
+  Check(LBoard.Solution = 'OU', 'haslo zapamietane po normalizacji');
+  CheckEq(2, LBoard.SolutionAt(6, 8), 'U pochodzi z KULA i jest druga litera');
+  Check((LBoard.SolutionAt(7, 7) = 1) or (LBoard.SolutionAt(8, 8) = 1),
+    'O pochodzi z KOT albo z TOR');
+  Check(not ((LBoard.SolutionAt(7, 7) = 1) and (LBoard.SolutionAt(8, 8) = 1)),
+    'tylko jedno O wchodzi do hasla');
+  CheckEq(0, LBoard.SolutionAt(6, 7), 'kratka skrzyzowana nie wchodzi do hasla');
+  CheckEq(0, LBoard.SolutionAt(8, 7), 'druga kratka skrzyzowana tez nie');
+
+  Check(not LBoard.TrySetSolution('oul'),
+    'OUL odpada, bo U i L sa tylko w KULA');
+  CheckEq(0, LBoard.SolutionAt(6, 8), 'nieudana proba nie zostawia sladu');
+  Check(LBoard.Solution = '', 'nieudana proba czysci haslo');
+
+  Check(not LBoard.TrySetSolution('au'), 'AU odpada, obie litery z KULA');
+  Check(not LBoard.TrySetSolution('ooo'), 'OOO odpada, tylko dwa slowa maja O');
+  Check(not LBoard.TrySetSolution('xyz'), 'litery spoza planszy odpadaja');
+
+  Check(not LBoard.TrySetSolution('kot'),
+    'KOT odpada, bo K i T leza wylacznie na skrzyzowaniach');
+
+  Check(LBoard.TrySetSolution('our'), 'OUR sklada sie z trzech roznych slow');
+  CheckEq(1, LBoard.SolutionAt(7, 7), 'O musi pochodzic z KOT, bo TOR oddaje R');
+  CheckEq(2, LBoard.SolutionAt(6, 8), 'U pochodzi z KULA');
+  CheckEq(3, LBoard.SolutionAt(8, 9), 'R pochodzi z TOR');
+  CheckEq(0, LBoard.SolutionAt(8, 8), 'drugie O z TOR zostaje wolne');
+
+  Check(not LBoard.TrySetSolution('oor'),
+    'OOR odpada, bo oba O i R potrzebuja lacznie trzech slow, a TOR jest jedno');
+
+  Check(LBoard.TrySetSolution('our'), 'haslo mozna ustawic ponownie');
+  LBoard.ClearSolution;
+  CheckEq(0, LBoard.SolutionAt(7, 7), 'ClearSolution zeruje znaczniki');
+
+  Check(LBoard.TrySetSolution('ou'), 'haslo mozna nadpisac');
+  LBoard.Clear;
+  Check(LBoard.Solution = '', 'Clear czysci haslo');
+end;
+
+procedure TestSolutionOnBoard;
+var
+  LLang: IXwLang;
+  LGen: TXwGenerator;
+  LOpt: TXwGenOptions;
+  LRes: TXwGenResult;
+  LText: string;
+  LSeen: TArray<Integer>;
+  H, V, LOrder, LFound: Integer;
+begin
+  Writeln('TestSolutionOnBoard');
+  LLang := TXwLangPL.Create(True);
+  LText := 'KRZYZOWKA';
+
+  LGen := TXwGenerator.Create(LLang);
+  try
+    LOpt := TXwGenOptions.Standard;
+    LOpt.MaxAttempts := 4;
+    LRes := LGen.Generate(XwCorpusEntries(60), LOpt);
+
+    Check(LRes.Board.TrySetSolution(LText),
+      'haslo ' + LText + ' miesci sie na planszy z 60 slow');
+
+    SetLength(LSeen, Length(LText) + 1);
+    LFound := 0;
+
+    for V := 0 to LRes.Board.VSize - 1 do
+      for H := 0 to LRes.Board.HSize - 1 do
+      begin
+        LOrder := LRes.Board.SolutionAt(H, V);
+        if LOrder = 0 then Continue;
+
+        Inc(LFound);
+        if (LOrder < 1) or (LOrder > Length(LText)) then
+          Check(False, Format('numer hasla %d poza zakresem', [LOrder]))
+        else
+        begin
+          Inc(LSeen[LOrder]);
+          if LRes.Board.CellChar(H, V) <> LText[LOrder] then
+            Check(False, Format('litera %d hasla nie zgadza sie w (%d,%d)', [LOrder, H, V]));
+          if LRes.Board.CellState(H, V) = 3 then
+            Check(False, Format('litera %d hasla stoi na skrzyzowaniu', [LOrder]));
+        end;
+      end;
+
+    CheckEq(Length(LText), LFound, 'oznaczonych kratek tyle, ile liter hasla');
+
+    for LOrder := 1 to Length(LText) do
+      if LSeen[LOrder] <> 1 then
+        Check(False, Format('pozycja %d hasla wystepuje %d razy', [LOrder, LSeen[LOrder]]));
+
+    Check(True, 'kazda pozycja hasla dokladnie raz, litery zgodne, bez skrzyzowan');
+  finally
+    LGen.Free;
+  end;
+end;
+
+function BuildSampleBoard(out ALang: IXwLang): IXwBoard;
+var
+  LFactory: IXwWordFactory;
+  LImpl: TXwBoard;
+begin
+  ALang := TXwLangPL.Create(True);
+  LFactory := TXwWordFactory.Create(ALang);
+  LImpl := TXwBoard.Create(15, 15, ALang);
+  Result := LImpl;
+
+  LImpl.TryPlaceWord(LFactory.CreateWord('kot', 'mruczek'));
+  LImpl.TryPlaceWord(LFactory.CreateWord('tor', 'kolejowy'));
+  LImpl.TryPlaceWord(LFactory.CreateWord('kula', 'bryla'));
+end;
+
+procedure TestPrint;
+var
+  LLang: IXwLang;
+  LBoard: IXwBoard;
+  LPrint: TXwPrintBoard;
+  I, LNumbered, LMarked: Integer;
+begin
+  Writeln('TestPrint');
+  LBoard := BuildSampleBoard(LLang);
+  Check(LBoard.TrySetSolution('our'), 'haslo ustawione przed migawka');
+
+  LPrint := XwBuildPrint(LBoard);
+
+  CheckEq(3, LPrint.Width, 'szerokosc migawki to szerokosc bboxu');
+  CheckEq(4, LPrint.Height, 'wysokosc migawki to wysokosc bboxu');
+  CheckEq(8, Length(LPrint.Cells), 'migawka ma tylko zajete kratki');
+  CheckEq(3, Length(LPrint.Entries), 'migawka ma trzy hasla');
+  Check(LPrint.Solution = 'OUR', 'migawka niesie haslo');
+
+  Check(LPrint.Cells[0].H = 0, 'kratki sa przesuniete do zera');
+  Check(LPrint.Cells[0].V = 0, 'kratki sa przesuniete do zera w pionie');
+  Check(LPrint.Cells[0].Letter = 'K', 'pierwsza kratka w porzadku czytania to K');
+  CheckEq(1, LPrint.Cells[0].Number, 'pierwsza kratka ma numer 1');
+  Check(LPrint.Cells[0].Crossed, 'K jest skrzyzowaniem KOT i KULA');
+
+  CheckEq(1, LPrint.Entries[0].Number, 'hasla posortowane po numerze');
+  Check(LPrint.Entries[0].Direction = wdHorizontal, 'poziome przed pionowym');
+  CheckEq(1, LPrint.Entries[1].Number, 'drugie haslo tez ma numer 1');
+  Check(LPrint.Entries[1].Direction = wdVertical, 'pionowe po poziomym');
+  CheckEq(2, LPrint.Entries[2].Number, 'trzecie haslo ma numer 2');
+  Check(LPrint.Entries[0].Description = 'mruczek', 'definicja przeniesiona do migawki');
+
+  LNumbered := 0;
+  LMarked := 0;
+  for I := 0 to High(LPrint.Cells) do
+  begin
+    if LPrint.Cells[I].Number > 0 then Inc(LNumbered);
+    if LPrint.Cells[I].SolutionOrder > 0 then Inc(LMarked);
+  end;
+  CheckEq(2, LNumbered, 'dwie kratki startowe');
+  CheckEq(3, LMarked, 'trzy kratki hasla');
+
+  LBoard.Clear;
+  CheckEq(3, Length(LPrint.Entries), 'migawka przezywa Clear planszy');
+end;
+
+procedure TestPlay;
+var
+  LLang: IXwLang;
+  LBoard: IXwBoard;
+  LPlay: IXwPlayBoard;
+  LCell: IXwPlayCell;
+  I: Integer;
+begin
+  Writeln('TestPlay');
+  LBoard := BuildSampleBoard(LLang);
+  LBoard.TrySetSolution('our');
+
+  LPlay := XwBuildPlay(LBoard, 3);
+
+  CheckEq(3, LPlay.Width, 'widok ma szerokosc bboxu');
+  CheckEq(3, LPlay.EntryCount, 'widok ma trzy hasla');
+  Check(LPlay.CellAt(1, 1) = nil, 'puste pole nie ma kratki');
+  Check(LPlay.CellAt(0, 0) <> nil, 'zajete pole ma kratke');
+  Check(LPlay.CellAt(0, 0) = LPlay.CellAt(0, 0), 'ta sama kratka to ta sama instancja');
+  Check(not LPlay.IsSolved, 'swiezy widok nie jest rozwiazany');
+
+  LCell := LPlay.CellAt(0, 0);
+  LCell.Guess := 'k';
+  Check(LCell.Guess = 'K', 'wpisana litera jest normalizowana');
+  Check(LCell.IsFilled, 'kratka jest wypelniona');
+  Check(not LCell.IsHinted, 'wpis gracza to nie podpowiedz');
+
+  Check(LPlay.CellAt(2, 0).IsCrossed, 'T jest skrzyzowaniem');
+  Check(not LPlay.CellAt(1, 0).IsCrossed, 'O nie jest skrzyzowaniem');
+
+  LPlay.Reset;
+  Check(not LPlay.CellAt(0, 0).IsFilled, 'Reset czysci wpisy');
+
+  for I := 0 to LPlay.EntryCount - 1 do
+    if LPlay.Entries[I].Number = 2 then
+    begin
+      LPlay.Entries[I].Cells[0].Guess := 'T';
+      LPlay.Entries[I].Cells[1].Guess := 'O';
+      LPlay.Entries[I].Cells[2].Guess := 'R';
+      Check(LPlay.Entries[I].IsSolved, 'TOR rozwiazany po wpisaniu trzech liter');
+    end;
+
+  Check(not LPlay.IsSolved, 'jedno haslo to za malo');
+end;
+
+procedure TestHints;
+var
+  LLang: IXwLang;
+  LBoard: IXwBoard;
+  LPlay: IXwPlayBoard;
+  H, V, LHinted, LOnSolution: Integer;
+  LCell: IXwPlayCell;
+begin
+  Writeln('TestHints');
+  LBoard := BuildSampleBoard(LLang);
+  LBoard.TrySetSolution('our');
+
+  LPlay := XwBuildPlay(LBoard, 3);
+  CheckEq(3, LPlay.HintsLeft, 'na starcie trzy podpowiedzi');
+
+  Check(LPlay.TryHint, 'pierwsza podpowiedz udziela sie');
+  Check(LPlay.CellAt(0, 0).IsHinted, 'pierwsza podpowiedz trafia w skrzyzowanie K');
+  Check(LPlay.CellAt(0, 0).Guess = 'K', 'podpowiedz wpisuje wlasciwa litere');
+  CheckEq(1, LPlay.HintsUsed, 'licznik podpowiedzi rosnie');
+
+  Check(LPlay.TryHint, 'druga podpowiedz udziela sie');
+  Check(LPlay.CellAt(2, 0).IsHinted, 'druga podpowiedz trafia w skrzyzowanie T');
+
+  Check(LPlay.TryHint, 'trzecia podpowiedz udziela sie');
+  CheckEq(0, LPlay.HintsLeft, 'limit wyczerpany');
+  Check(not LPlay.TryHint, 'czwarta podpowiedz odmowiona');
+
+  LHinted := 0;
+  LOnSolution := 0;
+  for V := 0 to LPlay.Height - 1 do
+    for H := 0 to LPlay.Width - 1 do
+    begin
+      LCell := LPlay.CellAt(H, V);
+      if LCell = nil then Continue;
+      if not LCell.IsHinted then Continue;
+      Inc(LHinted);
+      if LCell.SolutionOrder > 0 then Inc(LOnSolution);
+    end;
+
+  CheckEq(3, LHinted, 'trzy kratki oznaczone jako podpowiedziane');
+  CheckEq(0, LOnSolution, 'zadna podpowiedz nie trafila w kratke hasla');
+
+  LCell := LPlay.CellAt(0, 0);
+  LCell.Guess := 'X';
+  Check(LCell.Guess = 'K', 'podpowiedzianej kratki nie da sie nadpisac');
+
+  LPlay.Reset;
+  CheckEq(3, LPlay.HintsLeft, 'Reset przywraca limit podpowiedzi');
+  Check(not LPlay.CellAt(0, 0).IsHinted, 'Reset zdejmuje podpowiedzi');
+end;
+
+procedure TestRender;
+var
+  LLang: IXwLang;
+  LBoard: IXwBoard;
+  LPrint: TXwPrintBoard;
+  LPlay: IXwPlayBoard;
+  LLines: TArray<string>;
+begin
+  Writeln('TestRender');
+  LBoard := BuildSampleBoard(LLang);
+  LBoard.TrySetSolution('our');
+  LPrint := XwBuildPrint(LBoard);
+
+  LLines := XwRenderBoard(LPrint, rmLetters);
+  CheckEq(4, Length(LLines), 'render ma tyle wierszy, ile wysokosc bboxu');
+  Check(LLines[0] = '  K  O  T', 'pierwszy wiersz to KOT');
+  Check(LLines[1] = '  U     O', 'puste pole w srodku zostaje puste');
+  Check(LLines[2] = '  L     R', 'trzeci wiersz');
+  Check(LLines[3] = '  A      ', 'ostatni wiersz ma tylko A');
+
+  LLines := XwRenderBoard(LPrint, rmNumbers);
+  Check(LLines[0] = '  1  .  2', 'numery hasel tylko w kratkach startowych');
+  Check(LLines[3] = '  .      ', 'kratka bez numeru pokazuje kropke');
+
+  LLines := XwRenderBoard(LPrint, rmSolution);
+  Check(LLines[0] = '  .  1  .', 'pierwsza litera hasla to O z KOT');
+  Check(LLines[1] = '  2     .', 'druga litera hasla to U z KULA');
+  Check(LLines[2] = '  .     3', 'trzecia litera hasla to R z TOR');
+
+  LLines := XwRenderBoard(LPrint, rmBlank);
+  Check(LLines[0] = '  .  .  .', 'wydruk do rozwiazywania nie pokazuje liter');
+
+  LLines := XwRenderClues(LPrint);
+  CheckEq(5, Length(LLines), 'lista pytan ma dwa naglowki i trzy hasla');
+  Check(LLines[0] = 'POZIOMO', 'najpierw poziomo');
+  Check(LLines[1] = '  1. mruczek (3)', 'KOT jako 1 poziomo');
+  Check(LLines[2] = 'PIONOWO', 'potem pionowo');
+  Check(LLines[3] = '  1. bryla (4)', 'KULA jako 1 pionowo');
+  Check(LLines[4] = '  2. kolejowy (3)', 'TOR jako 2 pionowo');
+
+  LPlay := XwBuildPlay(LBoard, 2);
+  LLines := XwRenderPlay(LPlay);
+  Check(LLines[0] = '  .  .  .', 'swiezy widok gry jest pusty');
+
+  LLines := XwRenderPlayNumbered(LPlay);
+  Check(LLines[0] = ' 1.   .  2. ', 'siatka z numerami: pusty pierwszy wiersz');
+  Check(LLines[1] = '  .       . ', 'siatka z numerami: drugi wiersz');
+  Check(LLines[3] = '  .         ', 'siatka z numerami: ostatni wiersz');
+
+  LPlay.CellAt(1, 0).Guess := 'o';
+  LPlay.TryHint;
+  LLines := XwRenderPlay(LPlay);
+  Check(LLines[0] = '  k  O  .', 'podpowiedz mala litera, wpis gracza duza');
+
+  LLines := XwRenderPlayNumbered(LPlay);
+  Check(LLines[0] = ' 1k   O  2. ', 'siatka z numerami laczy numer i litere');
 end;
 
 procedure TestFullBoard;
@@ -534,6 +913,13 @@ begin
   TestBounds;
   TestGeometry;
   TestPlacementMetrics;
+  TestNumbering;
+  TestSolution;
+  TestSolutionOnBoard;
+  TestPrint;
+  TestPlay;
+  TestHints;
+  TestRender;
   TestFullBoard;
   TestClearRebuild;
   TestGenerator;
@@ -823,6 +1209,7 @@ var
   LGen: TXwGenerator;
   LOpt: TXwGenOptions;
   LRes: TXwGenResult;
+  LPrint: TXwPrintBoard;
 begin
   LLang := TXwLangPL.Create(True);
   LEntries := XwCorpusEntries(AWordCount);
@@ -835,9 +1222,18 @@ begin
   try
     LRes := LGen.Generate(LEntries, LOpt);
 
+    LRes.Board.TrySetSolution('krzyzowka');
+    LPrint := XwBuildPrint(LRes.Board);
+
     Writeln('=== PRZYKLADOWA PLANSZA ===');
     Writeln;
-    LRes.Board.PrintToConsole(True);
+    XwWriteLines(XwRenderBoard(LPrint, rmLetters));
+    Writeln;
+    Writeln('--- numery hasel ---');
+    XwWriteLines(XwRenderBoard(LPrint, rmNumbers));
+    Writeln;
+    Writeln('--- haslo: ' + LPrint.Solution + ' ---');
+    XwWriteLines(XwRenderBoard(LPrint, rmSolution));
     Writeln;
     Write(LRes.Metrics.AsText);
     Writeln(Format('  proby          %d,  przestawien %d,  enumeracji %d',

@@ -11,13 +11,13 @@ type
     TermPattern = '<h1[^>]*>(.*?)</h1>';
     RowPattern = '<tr[^>]*>(.*?)</tr>';
     CellPattern = '<t[dh][^>]*>(.*?)</t[dh]>';
-    MeaningsBlockPattern = 'znaczenie\s*:(.*?)(?:POWI\u0104ZANE|KOMENTARZE|<hr|</body)';
+    MeaningsBlockPattern = 'znaczenie\s*:(.*?)(?:POWI¥ZANE|KOMENTARZE|<hr|</body)';
     MeaningsSplitPattern = '\s*\d+\.\s*';
-    RelatedBlockPattern = 'POWI\u0104ZANE HAS\u0141A(.*?)(?:KOMENTARZE|<hr|</body)';
+    RelatedBlockPattern = 'POWI¥ZANE HAS£A(.*?)(?:KOMENTARZE|<hr|</body)';
     RelatedItemPattern = '<a[^>]*>(.*?)</a>';
     AllowedPattern = '(?<!nie)dopuszczalne w grach';
-    SourcesRow = 'wyst\u0119powanie';
-    InflectedRow = 'odmienno\u015B\u0107';
+    SourcesRow = 'wystêpowanie';
+    InflectedRow = 'odmiennoœæ';
     UpdatedRow = 'aktualizacja';
   strict private
     type

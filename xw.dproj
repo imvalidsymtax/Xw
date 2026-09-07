@@ -104,6 +104,8 @@
         <DCCReference Include="src\Sjp.Http.pas"/>
         <DCCReference Include="src\Sjp.Parser.pas"/>
         <DCCReference Include="src\Sjp.Url.pas"/>
+        <DCCReference Include="src\Xw.Present.pas"/>
+        <DCCReference Include="src\Xw.Game.pas"/>
         <BuildConfiguration Include="Release">
             <Key>Cfg_2</Key>
             <CfgParent>Base</CfgParent>

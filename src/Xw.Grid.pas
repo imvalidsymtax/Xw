@@ -8,8 +8,6 @@ type
 
   TXwFreeValueProc<T> = reference to procedure(var AValue: T);
 
-  TXwCellCharFunc<T> = reference to function(const AValue: T; const H, V: Integer; var CDLeft, CDRight: Char): Char;
-
   TXwGrid<T> = class
     strict private
       FData: TArray<T>;
@@ -43,7 +41,6 @@ type
       property OwnsValues: Boolean read FOwnsValues write FOwnsValues;
       property OnFreeValue: TXwFreeValueProc<T> read FOnFreeValue write FOnFreeValue;
       function IsOccupied(const AIndex: Integer): Boolean; inline;
-      procedure Dump(const AGetChar: TXwCellCharFunc<T> = nil);
   end;
 
   PObject = ^TObject;
@@ -72,32 +69,6 @@ begin
   if FOwnsValues then
     Clear;
   inherited;
-end;
-
-procedure TXwGrid<T>.Dump(const AGetChar: TXwCellCharFunc<T>);
-var
-  H, V: Integer;
-  LChar, CDLeft, CDRight: Char;
-  LLine: string;
-begin
-  for V := 0 to FVSize - 1 do
-  begin
-    LLine := '';
-    for H := 0 to FHSize - 1 do
-    begin
-      CDLeft := '[';
-      CDRight := ']';
-      if Assigned(AGetChar) then
-        LChar := AGetChar(FData[V * FHSize + H], H, V, CDLeft, CDRight)
-      else
-        LChar := ' ';
-
-      if LLine <> '' then
-        LLine := LLine + ' ';
-      LLine := LLine + CDLeft + LChar + CDRight;
-    end;
-    Writeln(LLine);
-  end;
 end;
 
 procedure TXwGrid<T>.FreeValue(var AValue: T);

@@ -69,6 +69,8 @@ type
     ['{24E0A18A-ABFF-4293-9252-A5D965ACBEF9}']
 
     procedure Match(const ALetter: Char);
+    procedure Reveal;
+    function IsHinted: Boolean;
 
     function GetOriginal: Char;
     function GetMatched: Char;
@@ -155,6 +157,9 @@ type
     property HSize: Integer read GetHSize;
     property VSize: Integer read GetVSize;
 
+    function GetLang: IXwLang;
+    property Lang: IXwLang read GetLang;
+
     function GetBounds: TXwBounds;
     property Bounds: TXwBounds read GetBounds;
 
@@ -167,6 +172,14 @@ type
     function IsOccupied(const AH, AV: Integer): Boolean;
     function CellChar(const AH, AV: Integer): Char;
     function CellState(const AH, AV: Integer): Byte;
+    function NumberAt(const AH, AV: Integer): Integer;
+    function WordNumber(const AIndex: Integer): Integer;
+
+    function TrySetSolution(const AText: string): Boolean;
+    procedure ClearSolution;
+    function SolutionAt(const AH, AV: Integer): Integer;
+    function GetSolution: string;
+    property Solution: string read GetSolution;
 
     function GetWordCount: Integer;
     function GetPlacedWord(const AIndex: Integer): TXwPlacedWord;
@@ -185,8 +198,6 @@ type
 
     property Strategy: TXwStrategy read GetStrategy write SetStrategy;
     property WeightRescue: Double read GetWeightRescue write SetWeightRescue;
-
-    procedure PrintToConsole(const ShowOriginal: Boolean);
 
     procedure Clear;
     procedure Reset;

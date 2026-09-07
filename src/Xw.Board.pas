@@ -14,11 +14,28 @@ uses
 type
 
   TXwBoard = class(TInterfacedObject, IXwBoard)
+    strict private type
+      TXwSolCand = record
+        WordIndex: Integer;
+        CellIndex: Integer;
+      end;
     strict private
       FWordCross: TList<Integer>;
       FCellWord: TArray<Integer>;
       FChars: TArray<Char>;
       FDirs: TArray<Byte>;
+      FNumbers: TArray<Integer>;
+      FWordNumber: TArray<Integer>;
+      FNumbersDirty: Boolean;
+
+      FLang: IXwLang;
+      FSolution: string;
+      FSolutionOrder: TArray<Integer>;
+      FSolCand: TArray<TArray<TXwSolCand>>;
+      FSolMatchPos: TArray<Integer>;
+      FSolMatchCell: TArray<Integer>;
+      FSolVisited: TArray<Boolean>;
+
       FStamp: TArray<Integer>;
       FStampGen: Integer;
 
@@ -46,8 +63,11 @@ type
       FScoreDensity: Double;
       FScoreOrphan: Double;
 
+      function SolutionAugment(const APos: Integer): Boolean;
+
       function GetHSize: Integer;
       function GetVSize: Integer;
+      function GetLang: IXwLang;
       function GetOriginH: Integer;
       function GetOriginV: Integer;
 
@@ -85,13 +105,19 @@ type
       function GetBounds: TXwBounds;
       function Evaluate: TXwBoardScore;
 
-      procedure PrintToConsole(const ShowOriginal: Boolean = False);
-
       function GetPlacedWord(const AIndex: Integer): TXwPlacedWord;
       function GetWordCount: Integer;
       function IsOccupied(const AH, AV: Integer): Boolean;
       function CellChar(const AH, AV: Integer): Char;
       function CellState(const AH, AV: Integer): Byte;
+      function NumberAt(const AH, AV: Integer): Integer;
+      function WordNumber(const AIndex: Integer): Integer;
+      procedure EnsureNumbers;
+
+      function TrySetSolution(const AText: string): Boolean;
+      procedure ClearSolution;
+      function SolutionAt(const AH, AV: Integer): Integer;
+      function GetSolution: string;
       function LetterAt(const AH, AV: Integer): IXwLetter;
 
       function AnchorCount: Integer;
@@ -143,6 +169,11 @@ begin
 
   SetLength(FChars, FMatrix.FlatSize);
   SetLength(FDirs, FMatrix.FlatSize);
+  SetLength(FNumbers, FMatrix.FlatSize);
+  SetLength(FSolutionOrder, FMatrix.FlatSize);
+  FNumbersDirty := True;
+  FLang := ALang;
+  FSolution := '';
   SetLength(FStamp, FMatrix.FlatSize * 2);
   FStampGen := 0;
 
@@ -205,6 +236,175 @@ begin
   Result := FDirs[AV * FMatrix.HSize + AH];
 end;
 
+procedure TXwBoard.EnsureNumbers;
+var
+  LIdx, H, V, I, LNext, LHSize: Integer;
+  LStart: Boolean;
+begin
+  if not FNumbersDirty then Exit;
+
+  for LIdx in FTouched do
+    FNumbers[LIdx] := 0;
+
+  SetLength(FWordNumber, FWords.Count);
+  for I := 0 to High(FWordNumber) do
+    FWordNumber[I] := 0;
+
+  LHSize := FMatrix.HSize;
+  LNext := 1;
+
+  for V := FBounds.MinV to FBounds.MaxV do
+    for H := FBounds.MinH to FBounds.MaxH do
+    begin
+      LIdx := V * LHSize + H;
+      if FChars[LIdx] = #0 then Continue;
+
+      LStart :=
+        ((H = 0) or (FChars[LIdx - 1] = #0))
+        and (H + 1 < LHSize) and (FChars[LIdx + 1] <> #0);
+
+      if not LStart then
+        LStart :=
+          ((V = 0) or (FChars[LIdx - LHSize] = #0))
+          and (V + 1 < FMatrix.VSize) and (FChars[LIdx + LHSize] <> #0);
+
+      if LStart then
+      begin
+        FNumbers[LIdx] := LNext;
+        Inc(LNext);
+      end;
+    end;
+
+  for I := 0 to FWords.Count - 1 do
+    FWordNumber[I] := FNumbers[
+      FWords[I].Placement.V * LHSize + FWords[I].Placement.H];
+
+  FNumbersDirty := False;
+end;
+
+procedure TXwBoard.ClearSolution;
+var
+  LIdx: Integer;
+begin
+  for LIdx in FTouched do
+    FSolutionOrder[LIdx] := 0;
+  FSolution := '';
+end;
+
+function TXwBoard.GetSolution: string;
+begin
+  Result := FSolution;
+end;
+
+function TXwBoard.SolutionAt(const AH, AV: Integer): Integer;
+begin
+  if not FMatrix.InBounds(AH, AV) then Exit(0);
+  Result := FSolutionOrder[AV * FMatrix.HSize + AH];
+end;
+
+function TXwBoard.SolutionAugment(const APos: Integer): Boolean;
+var
+  I, W: Integer;
+begin
+  for I := 0 to High(FSolCand[APos]) do
+  begin
+    W := FSolCand[APos][I].WordIndex;
+    if FSolVisited[W] then Continue;
+    FSolVisited[W] := True;
+
+    if (FSolMatchPos[W] < 0) or SolutionAugment(FSolMatchPos[W]) then
+    begin
+      FSolMatchPos[W] := APos;
+      FSolMatchCell[W] := FSolCand[APos][I].CellIndex;
+      Exit(True);
+    end;
+  end;
+
+  Result := False;
+end;
+
+function TXwBoard.TrySetSolution(const AText: string): Boolean;
+var
+  LText: string;
+  LLen, I, K, LIdx, LOwner, LAt: Integer;
+  LChar: Char;
+begin
+  ClearSolution;
+
+  LText := FLang.Normalize(AText);
+  LLen := Length(LText);
+
+  if (LLen = 0) or (LLen > FWords.Count) then Exit(False);
+
+  SetLength(FSolCand, LLen);
+  for K := 0 to LLen - 1 do
+    FSolCand[K] := nil;
+
+  for I := 0 to FTouched.Count - 1 do
+  begin
+    LIdx := FTouched[I];
+    if FDirs[LIdx] = XW_DIR_BOTH then Continue;
+
+    LOwner := FCellWord[LIdx];
+    if LOwner < 0 then Continue;
+
+    LChar := FChars[LIdx];
+    for K := 0 to LLen - 1 do
+      if LText[K + 1] = LChar then
+      begin
+        LAt := Length(FSolCand[K]);
+        SetLength(FSolCand[K], LAt + 1);
+        FSolCand[K][LAt].WordIndex := LOwner;
+        FSolCand[K][LAt].CellIndex := LIdx;
+      end;
+  end;
+
+  SetLength(FSolMatchPos, FWords.Count);
+  SetLength(FSolMatchCell, FWords.Count);
+  SetLength(FSolVisited, FWords.Count);
+
+  for I := 0 to FWords.Count - 1 do
+  begin
+    FSolMatchPos[I] := -1;
+    FSolMatchCell[I] := -1;
+  end;
+
+  for K := 0 to LLen - 1 do
+  begin
+    for I := 0 to FWords.Count - 1 do
+      FSolVisited[I] := False;
+
+    if not SolutionAugment(K) then
+    begin
+      ClearSolution;
+      Exit(False);
+    end;
+  end;
+
+  for I := 0 to FWords.Count - 1 do
+    if FSolMatchPos[I] >= 0 then
+      FSolutionOrder[FSolMatchCell[I]] := FSolMatchPos[I] + 1;
+
+  FSolution := LText;
+  Result := True;
+end;
+
+function TXwBoard.NumberAt(const AH, AV: Integer): Integer;
+begin
+  if not FMatrix.InBounds(AH, AV) then Exit(0);
+  EnsureNumbers;
+  Result := FNumbers[AV * FMatrix.HSize + AH];
+end;
+
+function TXwBoard.WordNumber(const AIndex: Integer): Integer;
+begin
+  if (AIndex < 0) or (AIndex >= FWords.Count) then
+    raise EXwError.CreateFmt(
+      'TXwBoard.WordNumber: Out of bounds [0..%d]', [FWords.Count - 1]);
+  EnsureNumbers;
+  Result := FWordNumber[AIndex];
+end;
+
 function TXwBoard.GetWeightRescue: Double;
 begin
   Result := FWeightRescue;
@@ -246,6 +446,11 @@ end;
 function TXwBoard.GetVSize: Integer;
 begin
   Result := FMatrix.VSize;
+end;
+
+function TXwBoard.GetLang: IXwLang;
+begin
+  Result := FLang;
 end;
 
 function TXwBoard.GetOriginH: Integer;
@@ -361,34 +566,6 @@ begin
   Result := APlacement.Crossings > 0;
 end;
 
-procedure TXwBoard.PrintToConsole(const ShowOriginal: Boolean);
-begin
-  FMatrix.Dump(
-    function (const AValue: IXwLetter; const H, V: Integer; var CDLeft, CDRight: Char): Char
-    begin
-      if AValue = nil then
-      begin
-        Result := ' ';
-        Exit;
-      end;
-
-      if ShowOriginal then
-        Result := AValue.Original
-      else
-        Result := AValue.Matched;
-
-      if AValue.IsFirst[wdHorizontal] and AValue.IsFirst[wdVertical] then
-        CDRight := '/'
-      else if AValue.IsFirst[wdHorizontal] then
-        CDRight := '>'
-      else if AValue.IsFirst[wdVertical] then
-        CDRight := 'V';
-
-      if Result = #0 then Result := '?';
-    end
-  );
-end;
-
 procedure TXwBoard.Clear;
 var
   LWord: TXwPlacedWord;
@@ -412,7 +589,13 @@ begin
     FCellWord[LIdx] := -1;
     FChars[LIdx] := #0;
     FDirs[LIdx] := 0;
+    FNumbers[LIdx] := 0;
+    FSolutionOrder[LIdx] := 0;
   end;
+
+  FSolution := '';
+  FWordNumber := nil;
+  FNumbersDirty := True;
 
   FTouched.Clear;
 end;
@@ -488,6 +671,8 @@ begin
     wdHorizontal: ExpandBounds(APlacement.H + AWord.Length - 1, APlacement.V);
     wdVertical:   ExpandBounds(APlacement.H, APlacement.V + AWord.Length - 1);
   end;
+
+  FNumbersDirty := True;
 
   FWordCross.Add(APlacement.Crossings);
   LPlaced.Word := AWord;
