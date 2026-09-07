@@ -402,8 +402,7 @@ end;
 procedure TestGenerator;
 var
   LLang: IXwLang;
-  LFactory: IXwWordFactory;
-  LWords: TArray<IXwWord>;
+  LEntries: TXwEntries;
   LGen: TXwGenerator;
   LOpt: TXwGenOptions;
   LA, LB, LC: TXwGenResult;
@@ -411,28 +410,34 @@ var
 begin
   Writeln('TestGenerator');
   LLang := TXwLangPL.Create(True);
-  LFactory := TXwWordFactory.Create(LLang);
-  LWords := XwBuildWords(LFactory, 100);
+  LEntries := XwCorpusEntries(100);
 
   LGen := TXwGenerator.Create(LLang);
   try
     LOpt := TXwGenOptions.Standard;
     LOpt.MaxAttempts := 8;
 
-    LA := LGen.Generate(LWords, LOpt);
-    LB := LGen.Generate(LWords, LOpt);
+    LA := LGen.Generate(LEntries, LOpt);
+    LB := LGen.Generate(LEntries, LOpt);
 
+    CheckEq(100, LA.Accepted, 'korpus wchodzi w calosci');
+    CheckEq(0, Length(LA.Rejected), 'korpus nie ma odrzutow');
     CheckEq(LA.Metrics.Placed, LB.Metrics.Placed, 'ten sam seed daje te sama liczbe slow');
     Check(SameValue(LA.Metrics.Total, LB.Metrics.Total, 0.000001),
       'ten sam seed daje ten sam wynik');
+
     Check(XwValidateBoard(LB.Board, LMsg), 'plansza z generatora jest poprawna: ' + LMsg);
+    Check(XwValidateBoard(LA.Board, LMsg),
+      'pierwsza plansza przezyla drugie Generate: ' + LMsg);
 
     LOpt.Seed := LOpt.Seed + 1;
-    LC := LGen.Generate(LWords, LOpt);
+    LC := LGen.Generate(LEntries, LOpt);
     Check(XwValidateBoard(LC.Board, LMsg), 'plansza z innego seeda jest poprawna: ' + LMsg);
+    Check(XwValidateBoard(LA.Board, LMsg),
+      'pierwsza plansza przezyla trzecie Generate: ' + LMsg);
 
     LOpt := TXwGenOptions.Deterministic;
-    LA := LGen.Generate(LWords, LOpt);
+    LA := LGen.Generate(LEntries, LOpt);
     CheckEq(1, LA.Attempts, 'tryb deterministyczny robi jedna probe');
     Check(LA.Metrics.Placed > 2, 'globalny wybor ruchu nie zakleszcza sie na dwoch slowach');
     Check(XwValidateBoard(LA.Board, LMsg), 'plansza deterministyczna jest poprawna: ' + LMsg);
@@ -441,11 +446,49 @@ begin
   end;
 end;
 
-procedure TestRefine;
+procedure TestEntries;
 var
   LLang: IXwLang;
   LFactory: IXwWordFactory;
-  LWords: TArray<IXwWord>;
+  LGen: TXwGenerator;
+  LOpt: TXwGenOptions;
+  LEntries: TXwEntries;
+  LRes: TXwGenResult;
+begin
+  Writeln('TestEntries');
+  LLang := TXwLangPL.Create(True);
+  LFactory := TXwWordFactory.Create(LLang);
+
+  SetLength(LEntries, 6);
+  LEntries[0].Phrase := 'kot';       LEntries[0].Description := 'mruczek';
+  LEntries[1].Phrase := 'KOT';       LEntries[1].Description := 'duplikat po normalizacji';
+  LEntries[2].Phrase := 'a';         LEntries[2].Description := 'za krotkie';
+  LEntries[3].Phrase := 'tor1';      LEntries[3].Description := 'cyfra';
+  LEntries[4].Phrase := ' tor ';     LEntries[4].Description := 'do przyciecia';
+  LEntries[5].Phrase := 'okno';      LEntries[5].Description := 'w scianie';
+
+  LGen := TXwGenerator.Create(LFactory);
+  try
+    Check(LGen.Lang = LLang, 'generator bierze jezyk z fabryki');
+
+    LOpt := TXwGenOptions.Deterministic;
+    LRes := LGen.Generate(LEntries, LOpt);
+
+    CheckEq(3, LRes.Accepted, 'przyjete trzy poprawne frazy');
+    CheckEq(3, Length(LRes.Rejected), 'odrzucone trzy frazy');
+    Check(LRes.Rejected[0].Phrase = 'KOT', 'duplikat zgloszony z oryginalna pisownia');
+    Check(Pos('Duplikat', LRes.Rejected[0].Reason) > 0, 'powod duplikatu opisany');
+    Check(LRes.Rejected[1].Phrase = 'a', 'za krotkie zgloszone');
+    Check(LRes.Rejected[2].Phrase = 'tor1', 'cyfra zgloszona');
+  finally
+    LGen.Free;
+  end;
+end;
+
+procedure TestRefine;
+var
+  LLang: IXwLang;
+  LEntries: TXwEntries;
   LGen: TXwGenerator;
   LOpt: TXwGenOptions;
   LPlain, LFine: TXwGenResult;
@@ -453,18 +496,17 @@ var
 begin
   Writeln('TestRefine');
   LLang := TXwLangPL.Create(True);
-  LFactory := TXwWordFactory.Create(LLang);
-  LWords := XwBuildWords(LFactory, 100);
+  LEntries := XwCorpusEntries(100);
 
   LGen := TXwGenerator.Create(LLang);
   try
     LOpt := TXwGenOptions.Standard;
     LOpt.MaxAttempts := 4;
     LOpt.RefineRounds := 0;
-    LPlain := LGen.Generate(LWords, LOpt);
+    LPlain := LGen.Generate(LEntries, LOpt);
 
     LOpt.RefineRounds := 4;
-    LFine := LGen.Generate(LWords, LOpt);
+    LFine := LGen.Generate(LEntries, LOpt);
 
     CheckEq(0, LPlain.Relocations, 'bez poprawek nie ma przestawien');
     Check(LFine.Metrics.Total >= LPlain.Metrics.Total - 0.000001,
@@ -495,6 +537,7 @@ begin
   TestFullBoard;
   TestClearRebuild;
   TestGenerator;
+  TestEntries;
   TestRefine;
 
   Writeln;
@@ -548,8 +591,7 @@ procedure RunGen(const ATag: string; const AWordCount: Integer;
   const AOptions: TXwGenOptions; const ASeeds: Integer);
 var
   LLang: IXwLang;
-  LFactory: IXwWordFactory;
-  LWords: TArray<IXwWord>;
+  LEntries: TXwEntries;
   LGen: TXwGenerator;
   LRes: TXwGenResult;
   LOpt: TXwGenOptions;
@@ -564,8 +606,7 @@ begin
   if LRuns < 1 then LRuns := 1;
 
   LLang := TXwLangPL.Create(True);
-  LFactory := TXwWordFactory.Create(LLang);
-  LWords := XwBuildWords(LFactory, AWordCount);
+  LEntries := XwCorpusEntries(AWordCount);
 
   SetLength(LTotals, LRuns);
   LSumPlaced := 0;
@@ -587,7 +628,7 @@ begin
       LOpt := AOptions;
       LOpt.Seed := AOptions.Seed + UInt64(K) * 7919;
 
-      LRes := LGen.Generate(LWords, LOpt);
+      LRes := LGen.Generate(LEntries, LOpt);
 
       LTotals[K] := LRes.Metrics.Total;
       Inc(LSumPlaced, LRes.Metrics.Placed);
@@ -778,15 +819,13 @@ end;
 procedure XwPrintSample(const AWordCount: Integer);
 var
   LLang: IXwLang;
-  LFactory: IXwWordFactory;
-  LWords: TArray<IXwWord>;
+  LEntries: TXwEntries;
   LGen: TXwGenerator;
   LOpt: TXwGenOptions;
   LRes: TXwGenResult;
 begin
   LLang := TXwLangPL.Create(True);
-  LFactory := TXwWordFactory.Create(LLang);
-  LWords := XwBuildWords(LFactory, AWordCount);
+  LEntries := XwCorpusEntries(AWordCount);
 
   LOpt := TXwGenOptions.Standard;
   LOpt.MaxAttempts := 48;
@@ -794,7 +833,7 @@ begin
 
   LGen := TXwGenerator.Create(LLang);
   try
-    LRes := LGen.Generate(LWords, LOpt);
+    LRes := LGen.Generate(LEntries, LOpt);
 
     Writeln('=== PRZYKLADOWA PLANSZA ===');
     Writeln;

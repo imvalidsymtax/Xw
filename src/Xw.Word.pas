@@ -39,6 +39,7 @@ type
       FLang: IXwLang;
     public
       constructor Create(const ALang: IXwLang);
+      function GetLang: IXwLang;
       function CreateWord(const AWord, ADescription: string): IXwWord;
   end;
 
@@ -155,6 +156,11 @@ constructor TXwWordFactory.Create(const ALang: IXwLang);
 begin
   inherited Create;
   FLang := ALang;
+end;
+
+function TXwWordFactory.GetLang: IXwLang;
+begin
+  Result := FLang;
 end;
 
 function TXwWordFactory.CreateWord(const AWord, ADescription: string): IXwWord;

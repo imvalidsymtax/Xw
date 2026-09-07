@@ -50,11 +50,14 @@ type
     Relocations: Integer;
     Enumerations: Int64;
     ElapsedMs: Double;
+    Accepted: Integer;
+    Rejected: TArray<TXwRejected>;
   end;
 
   TXwGenerator = class
   strict private
     FLang: IXwLang;
+    FFactory: IXwWordFactory;
     FState: UInt64;
     FEnumerations: Int64;
 
@@ -84,6 +87,8 @@ type
       const AWeights: TXwScoreWeights): Double;
 
     function ChooseSeedIndex(const APool: Integer): Integer;
+    function BuildWords(const AEntries: TXwEntries;
+      out ARejected: TArray<TXwRejected>): TArray<IXwWord>;
 
     procedure Replay(const AImpl: TXwBoard; const AMoves: TArray<TXwMove>);
     function TryRelocate(const AImpl: TXwBoard; const ABoard: IXwBoard;
@@ -93,11 +98,14 @@ type
       var AMoves: TArray<TXwMove>; const AOptions: TXwGenOptions;
       var ABest: TXwMetrics): Integer;
   public
-    constructor Create(const ALang: IXwLang);
+    constructor Create(const ALang: IXwLang); overload;
+    constructor Create(const AFactory: IXwWordFactory); overload;
+
+    property Lang: IXwLang read FLang;
 
     class function ArenaSideFor(const AWords: TArray<IXwWord>): Integer; static;
 
-    function Generate(const AWords: TArray<IXwWord>;
+    function Generate(const AEntries: TXwEntries;
       const AOptions: TXwGenOptions): TXwGenResult;
   end;
 
@@ -106,7 +114,9 @@ implementation
 uses
   System.SysUtils,
   System.Math,
-  System.Diagnostics;
+  System.Diagnostics,
+  System.Generics.Collections,
+  Xw.Word;
 
 class function TXwScoreWeights.Standard: TXwScoreWeights;
 begin
@@ -152,9 +162,65 @@ end;
 
 constructor TXwGenerator.Create(const ALang: IXwLang);
 begin
+  if ALang = nil then
+    raise EXwError.Create('TXwGenerator: brak jezyka.');
+  Create(TXwWordFactory.Create(ALang) as IXwWordFactory);
+end;
+
+constructor TXwGenerator.Create(const AFactory: IXwWordFactory);
+begin
   inherited Create;
-  FLang := ALang;
+  if AFactory = nil then
+    raise EXwError.Create('TXwGenerator: brak fabryki slow.');
+  FFactory := AFactory;
+  FLang := AFactory.Lang;
+  if FLang = nil then
+    raise EXwError.Create('TXwGenerator: fabryka nie zna jezyka.');
   FState := 88172645463325252;
+end;
+
+function TXwGenerator.BuildWords(const AEntries: TXwEntries;
+  out ARejected: TArray<TXwRejected>): TArray<IXwWord>;
+var
+  LSeen: TDictionary<string, Boolean>;
+  I, LCount, LBad: Integer;
+  LText, LMessage: string;
+begin
+  SetLength(Result, Length(AEntries));
+  SetLength(ARejected, Length(AEntries));
+  LCount := 0;
+  LBad := 0;
+
+  LSeen := TDictionary<string, Boolean>.Create;
+  try
+    for I := 0 to High(AEntries) do
+    begin
+      if not FLang.TryPrepare(AEntries[I].Phrase, LText, LMessage) then
+      begin
+        ARejected[LBad].Phrase := AEntries[I].Phrase;
+        ARejected[LBad].Reason := LMessage;
+        Inc(LBad);
+        Continue;
+      end;
+
+      if LSeen.ContainsKey(LText) then
+      begin
+        ARejected[LBad].Phrase := AEntries[I].Phrase;
+        ARejected[LBad].Reason := Format('Duplikat frazy "%s".', [LText]);
+        Inc(LBad);
+        Continue;
+      end;
+
+      LSeen.Add(LText, True);
+      Result[LCount] := FFactory.CreateWord(LText, AEntries[I].Description);
+      Inc(LCount);
+    end;
+  finally
+    LSeen.Free;
+  end;
+
+  SetLength(Result, LCount);
+  SetLength(ARejected, LBad);
 end;
 
 function TXwGenerator.NextRandom: UInt64;
@@ -554,7 +620,7 @@ begin
   end;
 end;
 
-function TXwGenerator.Generate(const AWords: TArray<IXwWord>;
+function TXwGenerator.Generate(const AEntries: TXwEntries;
   const AOptions: TXwGenOptions): TXwGenResult;
 var
   LBoard: IXwBoard;
@@ -576,12 +642,10 @@ var
 begin
   Result := Default(TXwGenResult);
 
-  FWords := AWords;
+  FWords := BuildWords(AEntries, Result.Rejected);
   N := Length(FWords);
+  Result.Accepted := N;
   if N = 0 then Exit;
-
-  for I := 0 to N - 1 do
-    FWords[I].Rebuild;
 
   FEnumerations := 0;
   FState := AOptions.Seed;

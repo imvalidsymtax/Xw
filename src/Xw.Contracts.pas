@@ -37,6 +37,18 @@ type
 
   TXwLetterPosition = (lpNone, lpFirst, lpMiddle, lpLast);
 
+  TXwEntry = record
+    Phrase: string;
+    Description: string;
+  end;
+
+  TXwEntries = TArray<TXwEntry>;
+
+  TXwRejected = record
+    Phrase: string;
+    Reason: string;
+  end;
+
   IXwLang = interface
     ['{A87D3B25-206A-4040-AF9D-D12014194029}']
     function GetName: string;
@@ -104,6 +116,9 @@ type
 
   IXwWordFactory = interface
     ['{1A5A64DD-F44C-444C-A818-73CEBAAB4116}']
+
+    function GetLang: IXwLang;
+    property Lang: IXwLang read GetLang;
 
     function CreateWord(const AWord, ADescription: string): IXwWord;
   end;
